@@ -1,0 +1,8 @@
+# Stage-1 firmware (env jc1060p470c_usbscreen) on top of board/sdkconfig.board and sdkconfig.defaults.
+# Merged by the root CMakeLists.txt when DASH_APP is usb_screen.
+
+# No radio: the ESP32-C6 and its ESP-Hosted link stay off. esp_hosted is linked whole-archive and its
+# constructor resets the C6 and starts the SDIO transport before app_main; the "custom" Wi-Fi-remote library
+# switches the component off entirely (CONFIG_ESP_HOSTED_ENABLED follows it). The board's hosted settings are
+# then unused, and the configure step says so.
+CONFIG_ESP_WIFI_REMOTE_LIBRARY_CUSTOM=y

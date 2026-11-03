@@ -1,0 +1,16 @@
+# 16MB flash, two OTA app slots of 6MB, ~3.9MB filesystem.
+#
+# CONFIG_PARTITION_TABLE_OFFSET is 0xa000 (see sdkconfig.defaults), as in the
+# vendor's demo, so the first partition starts after it. App slots must sit on
+# a 0x10000 boundary.
+#
+# The filesystem keeps the label "spiffs": NightMareNetwork opens the default
+# data/spiffs partition for its settings store and persisted jobs.
+#
+# Name,     Type, SubType,  Offset,    Size,      Flags
+nvs,        data, nvs,      0xb000,    0x6000,
+otadata,    data, ota,      ,          0x2000,
+phy_init,   data, phy,      ,          0x1000,
+ota_0,      app,  ota_0,    0x20000,   0x600000,
+ota_1,      app,  ota_1,    ,          0x600000,
+spiffs,     data, spiffs,   ,          0x3E0000,

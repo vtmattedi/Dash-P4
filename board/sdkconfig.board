@@ -1,0 +1,98 @@
+# Hardware-level Kconfig defaults for the Guition JC1060P470C.
+# Merged beneath the project's own sdkconfig.defaults (see the root CMakeLists.txt).
+# Anything that is about THIS PCB belongs here; anything about the application
+# belongs in sdkconfig.defaults. Values come from the vendor's working demo
+# (IDF 5.5.2 build) unless a comment says otherwise.
+
+# --- Chip, flash, memory -----------------------------------------------------
+# Silicon older than v3.0. If the boot log shows revision v3.x, replace the two
+# lines below with CONFIG_ESP32P4_SELECTS_REV_V3=y (and use board esp32-p4_r3).
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_1=y
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0xa000
+
+# 32MB hex PSRAM at 200MHz, code and rodata executed/read from it, which leaves
+# the internal RAM for stacks, DMA buffers and the Wi-Fi/hosted transport.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# The start-up memory test of 32 MB takes many seconds on every boot.
+CONFIG_SPIRAM_MEMTEST=n
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+# Vendor setting; the XIP-from-PSRAM option above is gated on it.
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+
+# --- LVGL 9 ------------------------------------------------------------------
+# LVGL allocates through libc malloc, which the PSRAM settings above send to the 32MB
+# external RAM for anything over 4KB; its built-in 64KB pool would starve a 1024x600 UI.
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_DEF_REFR_PERIOD=16
+CONFIG_LV_GRADIENT_MAX_STOPS=7
+CONFIG_LV_DRAW_LAYER_SIMPLE_BUF_SIZE=102400
+# Two software draw units: the second renders on the other core (the vendor's smooth demos do the same). Needs the FreeRTOS OS layer.
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=2
+# Hot draw functions in internal RAM instead of executing from PSRAM through the cache.
+CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
+# On-screen FPS / render-time readout (bottom right). Tuning aid: remove once the UI feels right.
+CONFIG_LV_USE_SYSMON=y
+CONFIG_LV_USE_PERF_MONITOR=y
+# Fonts: the UI uses 14/16/20/28/40/48; the others are cheap flash.
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_40=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+CONFIG_LV_FONT_DEFAULT_MONTSERRAT_16=y
+
+# --- ESP32-C6 Wi-Fi/BLE co-processor over ESP-Hosted (SDIO slot 1, 4-bit) ------
+# Pin numbers mirror board_pins.h (Kconfig cannot read a C header).
+CONFIG_ESP_HOSTED_ENABLED=y
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_NONE=y
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_IDF_SLAVE_TARGET="esp32c6"
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
+CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE=y
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=19
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=18
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=14
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=15
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=16
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=17
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=54
+CONFIG_ESP_HOSTED_GPIO_SLAVE_RESET_SLAVE=54
+CONFIG_ESP_HOSTED_SDIO_RESET_DELAY_MS=1500
+CONFIG_ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP=y
+CONFIG_ESP_HOSTED_TRANSPORT_RESTART_ON_FAILURE=y
+# Remote Wi-Fi buffer tuning from the vendor's build.
+CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM=10
+CONFIG_WIFI_RMT_RX_BA_WIN=6
+# ESP-Hosted's shell registers commands on the console UART; NightMare's own serial console reads that UART.
+CONFIG_ESP_HOSTED_CLI_ENABLED=n

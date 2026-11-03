@@ -1,0 +1,7 @@
+## Managed components of the application. Board-level ones are in board/idf_component.yml.
+dependencies:
+  idf: ">=5.5.0"
+  # The P4 has no radio: Wi-Fi is the ESP32-C6, reached over ESP-Hosted (SDIO).
+  # Versions are the ones the vendor's demo is known to run with.
+  espressif/esp_wifi_remote: "~1.3.0"
+  espressif/esp_hosted: "~2.11.0"

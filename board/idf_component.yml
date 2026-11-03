@@ -1,0 +1,9 @@
+## Managed components the board folder needs. Copy this file with the folder.
+dependencies:
+  idf: ">=5.5.0"
+  lvgl/lvgl:
+    version: "9.2.*"
+    public: true
+  espressif/esp_lvgl_port: "~2.7.0"   # 2.9.x needs LVGL>=9.3 and an IDF newer than 5.5.4
+  espressif/esp_lcd_jd9165: "*"
+  espressif/esp_lcd_touch_gt911: "^1.2.0"

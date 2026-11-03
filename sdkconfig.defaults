@@ -1,0 +1,11 @@
+# Application-level Kconfig defaults. Hardware-level ones are in board/sdkconfig.board.
+
+# OTA: a new image must be confirmed by the app (App.cpp, 20 s after a healthy start) or the
+# bootloader rolls back to the previous slot on the next reset.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# Updates are normally pulled from the LAN (python -m http.server), so plain http:// is allowed.
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# The default event loop task runs the Wi-Fi handlers; the library's scan-done handler keeps a 32-entry AP record array
+# on that stack (about 4 KB), which overflowed the 4 KB default and reset the board when "search Wi-Fi" finished.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
