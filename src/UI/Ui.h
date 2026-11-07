@@ -12,6 +12,9 @@ enum UiPage
 #if DASH_PC_SCREEN
     UI_PAGE_PC, // the PC's display: opening the tab connects and shows it (PcLink_show)
 #endif
+#if DASH_CAMERA
+    UI_PAGE_CAMERA, // the board's camera live, its picture controls, and the USB webcam switch
+#endif
     UI_PAGE_SETTINGS,
     UI_PAGE_COUNT
 };

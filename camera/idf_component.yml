@@ -1,0 +1,5 @@
+## Managed components the camera needs. Copy this file with the folder.
+## esp_video is not listed: the project carries its own patched copy (third_party/esp_video, see third_party/NOTES.md),
+## and that copy's manifest asks for esp_cam_sensor (also local) and esp_ipa.
+dependencies:
+  idf: ">=5.5.0"

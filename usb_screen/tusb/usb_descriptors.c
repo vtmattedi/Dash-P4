@@ -6,7 +6,8 @@
  *
  * Derived from esp-iot-solution examples/usb/device/usb_extend_screen/main/tusb/usb_descriptors.c:
  * audio removed, the HID interface chosen at run time, the buffer limit sent in KB (the driver's unit).
- * Compiled into the tinyusb component (see usb_screen/CMakeLists.txt), which calls these callbacks.
+ * The three descriptor functions are the screen personality (see usb_device.h): usb_device calls them while the screen is
+ * what the USB port presents.
  */
 
 #include <stdio.h>
@@ -40,7 +41,7 @@ static tusb_desc_device_t s_desc_device = {
     .bNumConfigurations = 0x01,
 };
 
-uint8_t const *tud_descriptor_device_cb(void)
+uint8_t const *usb_screen_desc_device(void)
 {
     return (uint8_t const *)&s_desc_device;
 }
@@ -84,7 +85,7 @@ static uint8_t const s_desc_config_touch[] = {
                        (0x80 | EPNUM_HID_DATA), CFG_TUD_HID_EP_BUFSIZE, 4),
 };
 
-uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
+uint8_t const *usb_screen_desc_configuration(uint8_t index)
 {
     (void)index;
     return s_touch ? s_desc_config_touch : s_desc_config_display;
@@ -143,7 +144,7 @@ esp_err_t usb_descriptors_init(const usb_descriptors_config_t *cfg)
     return ESP_OK;
 }
 
-uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
+uint16_t const *usb_screen_desc_string(uint8_t index, uint16_t langid)
 {
     (void)langid;
     uint8_t chr_count;

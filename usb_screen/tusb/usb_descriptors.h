@@ -26,6 +26,11 @@ typedef struct {
     const char *serial;
 } usb_descriptors_config_t;
 
+/// The screen personality's descriptors (registered with usb_device by usb_screen_start()).
+uint8_t const *usb_screen_desc_device(void);
+uint8_t const *usb_screen_desc_configuration(uint8_t index);
+uint16_t const *usb_screen_desc_string(uint8_t index, uint16_t langid);
+
 /// Fill in the run-time parts (resolution in the HID report and the vendor string). Call before tusb_init().
 esp_err_t usb_descriptors_init(const usb_descriptors_config_t *cfg);
 

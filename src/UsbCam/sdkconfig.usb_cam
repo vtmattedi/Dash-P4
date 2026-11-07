@@ -1,0 +1,5 @@
+# Camera firmware (env jc1060p470c_usbcam) on top of board/sdkconfig.board, sdkconfig.defaults and sdkconfig.camera.
+# Merged by the root CMakeLists.txt when DASH_APP is usb_cam.
+
+# No radio, as in the USB screen firmware: the C6 and its ESP-Hosted link stay off.
+CONFIG_ESP_WIFI_REMOTE_LIBRARY_CUSTOM=y

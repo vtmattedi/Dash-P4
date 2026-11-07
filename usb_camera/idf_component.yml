@@ -1,0 +1,5 @@
+## Managed components the USB camera needs. Copy this file with the folder.
+dependencies:
+  idf: ">=5.5.0"
+  # TinyUSB device stack (the plain stack, configured by tusb/tusb_config.h; not esp_tinyusb). Same version as usb_screen/.
+  espressif/tinyusb: "~0.21.0"

@@ -23,6 +23,9 @@
 #if DASH_PC_SCREEN
 #include "PcScreen.h"
 #endif
+#if DASH_CAMERA
+#include "CameraMode.h"
+#endif
 
 static const char *TAG = "app";
 
@@ -166,6 +169,7 @@ void unsubscribePort(const std::string &filter) { Net_unsubscribe(filter); }
 //   TARGET                     the bindings as JSON
 //   TARGET <AC|LIGHT|RGB|DOOR|REST> <device> [resource]   bind a role ("" unbinds)
 //   PCSCREEN [SHOW|HIDE|CLOSE|AUTO [ON|OFF]]              the Windows USB screen (PC-screen builds only)
+//   CAMERA [SHOW|HOME|SHARE ON|OFF|SET <name> <value>|RESET]   the board's camera (camera builds only)
 //   C6OTA <url> | STATUS | RESTART                        update the ESP32-C6 co-processor over ESP-Hosted
 
 static NightMareResults answer(bool ok, const std::string &text)
@@ -365,12 +369,18 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
         return answer(true, "queued");
     }
 
+#if DASH_CAMERA
+    if (message.command == "CAMERA")
+    {
+        return CameraMode_command(message);
+    }
+#endif
 #if DASH_PC_SCREEN
     if (message.command == "PCSCREEN")
     {
         return PcScreen_command(message);
     }
-    return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, NOTIFY, TARGET, C6OTA, PCSCREEN]. "
+    return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, NOTIFY, TARGET, C6OTA, PCSCREEN, CAMERA]. "
                          "Framework built-ins and `>` resource commands still apply.");
 #else
     return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, NOTIFY, TARGET, C6OTA]. "

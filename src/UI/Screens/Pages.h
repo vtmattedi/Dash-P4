@@ -22,5 +22,12 @@ lv_obj_t *PagePc_create(lv_obj_t *parent);
 void PagePc_refresh(bool force);
 #endif
 
+#if DASH_CAMERA
+lv_obj_t *PageCamera_create(lv_obj_t *parent);
+void PageCamera_refresh(bool force);
+/// The page is being left: the camera no longer has to run for it.
+void PageCamera_leave();
+#endif
+
 lv_obj_t *PageSettings_create(lv_obj_t *parent);
 void PageSettings_refresh(bool force);

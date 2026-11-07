@@ -31,6 +31,9 @@ const PageDef kPages[UI_PAGE_COUNT] = {
 #if DASH_PC_SCREEN
     {"PC screen", LV_SYMBOL_IMAGE, "PC", PagePc_create, PagePc_refresh},
 #endif
+#if DASH_CAMERA
+    {"Camera", LV_SYMBOL_VIDEO, "Camera", PageCamera_create, PageCamera_refresh},
+#endif
     {"Settings", LV_SYMBOL_SETTINGS, "Settings", PageSettings_create, PageSettings_refresh},
 };
 
@@ -76,7 +79,8 @@ lv_obj_t *buildNavRail(lv_obj_t *parent)
     {
         lv_obj_t *tab = lv_obj_create(rail);
         Theme_plain(tab);
-        lv_obj_set_size(tab, UI_NAVRAIL_W - 1, 100);
+        // 100 px each while they fit; the rail is 556 px tall.
+        lv_obj_set_size(tab, UI_NAVRAIL_W - 1, UI_CONTENT_H / UI_PAGE_COUNT < 100 ? UI_CONTENT_H / UI_PAGE_COUNT : 100);
         lv_obj_set_style_bg_opa(tab, LV_OPA_COVER, 0);
         lv_obj_add_flag(tab, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_COLUMN);
@@ -258,6 +262,12 @@ void Ui_show(UiPage page)
     {
         lv_obj_add_flag(g_pageBox[previous], LV_OBJ_FLAG_HIDDEN);
         styleTab(previous);
+#if DASH_CAMERA
+        if (previous == UI_PAGE_CAMERA)
+        {
+            PageCamera_leave(); // the camera stops once nothing else wants it
+        }
+#endif
         if (previous == UI_PAGE_MONITOR)
         {
             PageMonitor_leave();

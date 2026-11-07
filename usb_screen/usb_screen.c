@@ -11,11 +11,11 @@
 #include <string.h>
 #include "usb_screen_priv.h"
 #include "usb_descriptors.h"
+#include "usb_device.h"
 
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_mac.h"
-#include "esp_private/usb_phy.h"
 #include "freertos/task.h"
 #include "tusb.h"
 
@@ -31,10 +31,10 @@ bool g_usb_screen_menu_open;
 uint32_t g_usb_screen_overlay_version = 1;
 static usb_screen_icon_t s_pick;
 
-static usb_phy_handle_t s_phy;
 static volatile usb_screen_link_t s_link = USB_SCREEN_DETACHED;
-static volatile bool s_connected = true;
 static char s_serial[13];
+// Defined with the hooks at the end of the file (a tentative definition: C allows it for a static const).
+static const usb_device_personality_t s_personality;
 
 const char *usb_screen_link_name(usb_screen_link_t link)
 {
@@ -73,15 +73,15 @@ static void set_link(usb_screen_link_t link)
 
 void usb_screen_connect(bool on)
 {
-    if (!g_usb_screen_own || on == s_connected) {
+    if (!g_usb_screen_own || on == usb_screen_connected()) {
         return;
     }
-    s_connected = on;
     if (on) {
-        tud_connect();
+        usb_device_select(USB_DEVICE_SCREEN);
     } else {
-        tud_disconnect();
-        // The stack gets no bus event from a soft disconnect: say it ourselves.
+        // Off the bus, or on to another personality (the camera) that is not ours to remove. The old personality's
+        // on_unmount hook has put the link in DETACHED.
+        usb_device_select(USB_DEVICE_NONE);
         set_link(USB_SCREEN_DETACHED);
     }
     ESP_LOGI(TAG, "USB %s", on ? "connected to the bus" : "removed from the bus");
@@ -89,7 +89,7 @@ void usb_screen_connect(bool on)
 
 bool usb_screen_connected(void)
 {
-    return s_connected;
+    return usb_device_current() == USB_DEVICE_SCREEN;
 }
 
 void usb_screen_note_frame(void)
@@ -203,26 +203,6 @@ void usb_screen_get_stats(usb_screen_stats_t *out)
     }
 }
 
-static esp_err_t phy_init(void)
-{
-    // The P4's high-speed OTG controller behind its UTMI PHY: the board's "high-speed" USB-C port.
-    usb_phy_config_t phy_conf = {
-        .controller = USB_PHY_CTRL_OTG,
-        .target = USB_PHY_TARGET_UTMI,
-        .otg_mode = USB_OTG_MODE_DEVICE,
-        .otg_speed = USB_PHY_SPEED_HIGH,
-    };
-    return usb_new_phy(&phy_conf, &s_phy);
-}
-
-static void tud_device_task(void *arg)
-{
-    (void)arg;
-    for (;;) {
-        tud_task();
-    }
-}
-
 esp_err_t usb_screen_start(const usb_screen_config_t *cfg)
 {
     ESP_RETURN_ON_FALSE(!g_usb_screen_own, ESP_ERR_INVALID_STATE, TAG, "already started");
@@ -257,26 +237,25 @@ esp_err_t usb_screen_start(const usb_screen_config_t *cfg)
     if (cfg->touch) {
         ESP_RETURN_ON_ERROR(usb_screen_touch_start(), TAG, "touch");
     }
-    ESP_RETURN_ON_ERROR(phy_init(), TAG, "USB PHY");
-    ESP_RETURN_ON_FALSE(tusb_init(), ESP_FAIL, TAG, "TinyUSB device stack");
-    // Core 0: core 1 carries the decode/draw task and the UI.
-    BaseType_t ok = xTaskCreatePinnedToCore(tud_device_task, "usb_screen", 4096, NULL, 6, NULL, 0);
-    ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_ERR_NO_MEM, TAG, "usb task");
+    ESP_RETURN_ON_ERROR(usb_device_register(USB_DEVICE_SCREEN, &s_personality), TAG, "personality");
+    // Normally the screen is what the device presents; a firmware with other personalities starts the device itself
+    // first (usb_device_start(), which then wins) and selects the screen when it is wanted.
+    ESP_RETURN_ON_ERROR(usb_device_start(USB_DEVICE_SCREEN), TAG, "USB device");
     ESP_LOGI(TAG, "USB screen %ux%u, touch %s, jpeg q%u, %u fps max, frames up to %u KB, serial %s", cfg->width,
              cfg->height, cfg->touch ? "on" : "off", cfg->jpeg_quality, cfg->max_fps,
              (unsigned)(cfg->frame_limit / 1024), g_usb_screen_cfg.serial);
     return ESP_OK;
 }
 
-/************************************************** TinyUSB callbacks ***********************************************/
+/********************************************** Personality hooks (called by usb_device) ********************************/
 
-void tud_mount_cb(void)
+static void on_mount(void)
 {
     usb_screen_video_reset_stream();
-    set_link(s_connected ? USB_SCREEN_MOUNTED : USB_SCREEN_DETACHED);
+    set_link(USB_SCREEN_MOUNTED);
 }
 
-void tud_umount_cb(void)
+static void on_unmount(void)
 {
     usb_screen_video_reset_stream();
     set_link(USB_SCREEN_DETACHED);
@@ -284,14 +263,25 @@ void tud_umount_cb(void)
 
 // The host stops the bus when it sleeps, when it powers the display down, and (without VBUS sensing) when the
 // cable is pulled: all three mean "nobody is looking at this screen any more".
-void tud_suspend_cb(bool remote_wakeup_en)
+static void on_suspend(bool remote_wakeup_en)
 {
     (void)remote_wakeup_en;
     set_link(USB_SCREEN_DETACHED);
 }
 
 // Back from suspend the driver has to send a frame before the screen counts as streaming again.
-void tud_resume_cb(void)
+static void on_resume(void)
 {
     set_link(tud_mounted() ? USB_SCREEN_MOUNTED : USB_SCREEN_DETACHED);
 }
+
+static const usb_device_personality_t s_personality = {
+    .name = "screen",
+    .device_descriptor = usb_screen_desc_device,
+    .configuration_descriptor = usb_screen_desc_configuration,
+    .string_descriptor = usb_screen_desc_string,
+    .on_mount = on_mount,
+    .on_unmount = on_unmount,
+    .on_suspend = on_suspend,
+    .on_resume = on_resume,
+};

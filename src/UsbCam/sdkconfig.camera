@@ -1,0 +1,10 @@
+# Camera sensor and mode, for every firmware that has the camera (DASH_CAMERA=1; see the root CMakeLists.txt).
+# Merged on top of board/sdkconfig.board and sdkconfig.defaults.
+
+# The sensor: OV02C10, one MIPI lane, RAW10 through the ISP. The vendor's demo runs 1920x1080; the preview uses
+# 1288x728 instead because the panel's PPA scaler takes ~100 ms for a 1080p frame (measured: 7.5 fps) and cost grows with
+# the input pixels. (1920x1080 stays an option: CONFIG_CAMERA_OV02C10_MIPI_RAW10_1920X1080_30FPS_1_LANE and its DEFAULT_FMT.)
+CONFIG_CAMERA_OV02C10=y
+CONFIG_CAMERA_OV02C10_MIPI_RAW10_1288X728_30FPS=y
+CONFIG_CAMERA_OV02C10_MIPI_DEFAULT_FMT_RAW10_1288X728_30FPS=y
+CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y

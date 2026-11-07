@@ -10,6 +10,8 @@ NightMare Network wall dashboard for the **Guition JC1060P470C** (ESP32-P4, 16 M
 | `jc1060p470c_usbscreen` | The panel as a Windows USB extended display only (stage 1) |
 | `jc1060p470c_usbscreen_nm` | Dashboard + Windows display when the PC streams (stage 2) |
 | `jc1060p470c_usbscreen_nm_espnow` | Stage 2 + ESP-NOW through the C6 (stage 3) |
+| `jc1060p470c_usbscreen_nm_cam` | Stage 2 + the board's camera: a Camera tab (live picture; exposure, white balance, saturation, brightness, contrast) and a switch that makes the USB-C port a webcam for the PC instead of the PC screen |
+| `jc1060p470c_usbcam` | The camera alone: preview on the panel and a USB webcam (serial debug console: `help`) |
 
 ## Build and flash
 
@@ -31,8 +33,16 @@ pio device monitor                  # serial monitor, 115200
 - `src/` - application, UI, USB screen, PC link
 - `board/` - everything specific to this board (display, touch, power); see [board/NOTES.md](board/NOTES.md)
 - `usb_screen/` - Windows USB display component
+- `usb_device/` - the USB device of the high-speed port; the screen and the camera are its "personalities" (one at a time)
+- `camera/`, `usb_camera/` - MIPI-CSI camera capture, and the UVC webcam (camera envs only)
+- `third_party/` - vendor copies of `esp_cam_sensor` and `esp_video` (the OV02C10 driver; the picture-adjustment patch), see its NOTES.md
 - `espnow_hosted/` - ESP-NOW over ESP-Hosted
 - `test/host`, `tools/host_test.sh` - host-side tests
 - `partitions.csv`, `sdkconfig.*` - flash layout and per-env configs
 
 The NightMareNetwork library is pulled from its GitHub `main` branch; don't edit the copy under `.pio/libdeps`.
+
+## Camera builds on Windows
+
+- The camera envs use their own dependency lock file (`dependencies.camera.lock`). Switching between envs that use different lock files makes the component manager re-fetch components, and on Windows it can leave a component incomplete (the configure step then fails with "Path ... does not exist"). `python tools/repair_managed.py` checks `managed_components/` and restores damaged components.
+- With the PC plugged into the high-speed USB-C port, the Camera tab's "USB webcam" switch changes what the PC sees: the camera (no driver needed) or the PC screen (needs Espressif's driver, see [usb_screen/NOTES.md](usb_screen/NOTES.md)).
