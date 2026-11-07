@@ -15,12 +15,59 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <NightMare/Config.h>
+
 #include "Prefs.h"
 #include "UI/Ui.h"
 #include "usb_camera.h"
 #include "usb_device.h"
 
 static const char *TAG = "cammode";
+
+// The picture adjustments are NightMare Configs: persisted by the library (restored in startNightMareESP()), settable
+// from the network and the console like any other Config, and the single source of truth. Units as camera_adjust_t.
+// Remote writes are range-checked here; the camera picks changes up in managerTask().
+namespace
+{
+template <int Lo, int Hi> bool inRange(Config<int> &, const int &requested) { return requested >= Lo && requested <= Hi; }
+
+Config<int> g_cfgExposure("camera:exposure", 0);       // tenths of an EV, -30..30
+Config<int> g_cfgBrightness("camera:brightness", 0);   // -50..50
+Config<int> g_cfgSaturation("camera:saturation", 100); // percent, 0..200
+Config<int> g_cfgContrast("camera:contrast", 100);     // percent, 50..150
+Config<bool> g_cfgWbHold("camera:wb_hold", false);     // hold the white balance instead of following the scene
+Config<int> g_cfgWarmth("camera:warmth", 0);           // -50..50, shifts the held white balance
+
+int clampTo(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+camera_adjust_t readConfigs()
+{
+    camera_adjust_t a = CAMERA_ADJUST_DEFAULT();
+    a.exposure = static_cast<int8_t>(clampTo(g_cfgExposure.value(), -30, 30));
+    a.brightness = static_cast<int8_t>(clampTo(g_cfgBrightness.value(), -50, 50));
+    a.saturation = static_cast<uint8_t>(clampTo(g_cfgSaturation.value(), 0, 200));
+    a.contrast = static_cast<uint8_t>(clampTo(g_cfgContrast.value(), 50, 150));
+    a.wb_hold = g_cfgWbHold.value();
+    a.warmth = static_cast<int8_t>(clampTo(g_cfgWarmth.value(), -50, 50));
+    return a;
+}
+
+bool sameAdjust(const camera_adjust_t &a, const camera_adjust_t &b)
+{
+    return a.exposure == b.exposure && a.brightness == b.brightness && a.saturation == b.saturation &&
+           a.contrast == b.contrast && a.wb_hold == b.wb_hold && a.warmth == b.warmth;
+}
+
+void writeConfigs(const camera_adjust_t &a)
+{
+    g_cfgExposure.set(a.exposure);
+    g_cfgBrightness.set(a.brightness);
+    g_cfgSaturation.set(a.saturation);
+    g_cfgContrast.set(a.contrast);
+    g_cfgWbHold.set(a.wb_hold);
+    g_cfgWarmth.set(a.warmth);
+}
+} // namespace
 
 namespace
 {
@@ -38,7 +85,8 @@ lv_image_dsc_t g_dsc[2];
 unsigned g_next = 0;
 
 std::atomic<lv_obj_t *> g_image{nullptr};
-camera_adjust_t g_adjust = CAMERA_ADJUST_DEFAULT();
+camera_adjust_t g_adjust = CAMERA_ADJUST_DEFAULT(); // what the camera has now (a slider being dragged is ahead of the Configs)
+camera_adjust_t g_seen = CAMERA_ADJUST_DEFAULT();   // the Configs as managerTask() last looked at them
 
 std::atomic<float> g_fps{0.0f};
 int64_t g_fpsStart = 0;
@@ -124,6 +172,16 @@ void managerTask(void *)
     {
         vTaskDelay(pdMS_TO_TICKS(250));
         const int64_t now = esp_timer_get_time();
+        // The Configs changed (restored at startup, or written from the network): take them over. A slider being
+        // dragged moves g_adjust only, so it is not undone here.
+        const camera_adjust_t fromConfigs = readConfigs();
+        if (!sameAdjust(fromConfigs, g_seen))
+        {
+            g_seen = fromConfigs;
+            g_adjust = fromConfigs;
+            camera_set_adjust(&g_adjust);
+        }
+
         const bool wanted = g_image.load() != nullptr || usb_camera_streaming();
         if (wanted)
         {
@@ -132,6 +190,7 @@ void managerTask(void *)
 
         if (wanted && !camera_running() && now >= retryAt)
         {
+            const size_t internalBefore = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             camera_config_t cfg = CAMERA_CONFIG_DEFAULT();
             cfg.i2c_bus = board_i2c_bus();
             const esp_err_t err = camera_start(&cfg, onFrame, nullptr);
@@ -140,7 +199,10 @@ void managerTask(void *)
                 g_error[0] = 0;
                 g_fpsStart = esp_timer_get_time();
                 g_fpsCount = 0;
-                ESP_LOGI(TAG, "camera started");
+                ESP_LOGI(TAG, "camera started: internal RAM %uK -> %uK free (largest block %uK)",
+                         static_cast<unsigned>(internalBefore / 1024),
+                         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+                         static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
             }
             else
             {
@@ -178,12 +240,15 @@ void CameraMode_begin()
 {
     const Prefs &prefs = Prefs_get();
 
-    g_adjust.exposure = static_cast<int8_t>(prefs.camExposure);
-    g_adjust.brightness = static_cast<int8_t>(prefs.camBrightness);
-    g_adjust.saturation = static_cast<uint8_t>(prefs.camSaturation);
-    g_adjust.contrast = static_cast<uint8_t>(prefs.camContrast);
-    g_adjust.wb_hold = prefs.camWbHold;
-    g_adjust.warmth = static_cast<int8_t>(prefs.camWarmth);
+    // The Configs hold their defaults until startNightMareESP() restores the saved values; managerTask() picks those
+    // up as soon as they differ, long before the camera runs.
+    g_cfgExposure.onWrite = inRange<-30, 30>;
+    g_cfgBrightness.onWrite = inRange<-50, 50>;
+    g_cfgSaturation.onWrite = inRange<0, 200>;
+    g_cfgContrast.onWrite = inRange<50, 150>;
+    g_cfgWarmth.onWrite = inRange<-50, 50>;
+    g_adjust = readConfigs();
+    g_seen = g_adjust;
     camera_set_adjust(&g_adjust); // kept, and applied when the camera starts
 
     ppa_client_config_t ppaConfig = {};
@@ -242,8 +307,8 @@ void CameraMode_setAdjust(const camera_adjust_t &adjust, bool persist)
     camera_get_adjust(&g_adjust); // the clamped values
     if (persist)
     {
-        Prefs_setCamAdjust(g_adjust.exposure, g_adjust.brightness, g_adjust.saturation, g_adjust.contrast, g_adjust.wb_hold,
-                           g_adjust.warmth);
+        writeConfigs(g_adjust);
+        g_seen = readConfigs(); // ours: not a change from outside
     }
 }
 

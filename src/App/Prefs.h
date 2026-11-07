@@ -14,14 +14,8 @@ struct Prefs
     bool pcAuto = true;    // the PC takes the panel as soon as it streams (builds with the PC screen only)
     bool pcTab = true;     // the hand-back tab on the PC's picture (builds with the PC screen only)
 
-    // The camera (builds with the camera only). camera_adjust_t's fields, in its units.
+    // The camera (builds with the camera only). The picture adjustments are NightMare Configs (CameraMode.cpp).
     bool camShare = false; // the USB port presents the panel's camera as a webcam instead of the PC screen
-    int camExposure = 0;   // tenths of an EV
-    int camBrightness = 0;
-    int camSaturation = 100; // percent
-    int camContrast = 100;   // percent
-    bool camWbHold = false;
-    int camWarmth = 0;
 };
 
 /// Load from the settings store. Call after introNightMareESP(), which opens it.
@@ -34,8 +28,6 @@ void Prefs_setBacklightRest(int level);
 void Prefs_setPcAuto(bool on);
 void Prefs_setPcTab(bool on);
 void Prefs_setCamShare(bool on);
-/// Store the camera adjustments (all of them: they are saved together, when a slider is let go).
-void Prefs_setCamAdjust(int exposure, int brightness, int saturation, int contrast, bool wbHold, int warmth);
 
 /// Bumped on every change.
 uint32_t Prefs_revision();

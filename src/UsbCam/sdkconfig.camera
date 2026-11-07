@@ -8,3 +8,19 @@ CONFIG_CAMERA_OV02C10=y
 CONFIG_CAMERA_OV02C10_MIPI_RAW10_1288X728_30FPS=y
 CONFIG_CAMERA_OV02C10_MIPI_DEFAULT_FMT_RAW10_1288X728_30FPS=y
 CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y
+
+# TLS buffers (MQTT) in PSRAM. The camera takes internal RAM when it starts; the dashboard already runs on ~90 KB of it
+# after the network is up, and a TLS record read then failed ("esp-aes: Failed to allocate memory for start alignment
+# buffer", MQTT dropped). The default keeps every mbedTLS allocation internal; this sends them to the 32 MB PSRAM.
+# (esp-aes still uses a few small internal DMA buffers of its own.)
+CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# The ISP pipeline controller's task stack (the auto exposure / white balance loop) in PSRAM too. The frame buffers
+# (USERPTR, camera.c) and the CSI driver's buffers are PSRAM already.
+CONFIG_ISP_PIPELINE_CONTROLLER_TASK_STACK_USE_PSRAM=y
+
+# Small allocations in PSRAM too. The default sends every allocation of 4 KB or less to internal RAM; LVGL (clib malloc),
+# std::string and most objects are small, so they filled it. Only allocations under 512 bytes stay internal now.
+# SPIRAM_MALLOC_RESERVE_INTERNAL (32 KB) still keeps a pool for internal-only requests.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512

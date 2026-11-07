@@ -248,6 +248,19 @@ void PageCamera_refresh(bool)
 
     Theme_setText(g_status, CameraMode_status());
 
+    // The settings can change behind the page's back (restored at startup, written from the network): follow them,
+    // unless a finger is on a slider.
+    bool touching = false;
+    for (lv_obj_t *s : {g_ev.slider, g_br.slider, g_sat.slider, g_con.slider, g_warm.slider})
+    {
+        touching = touching || lv_obj_has_state(s, LV_STATE_PRESSED);
+    }
+    if (!touching)
+    {
+        g_adj = CameraMode_adjust();
+        pullSliders();
+    }
+
     g_building = true;
     if (CameraMode_sharing())
     {
