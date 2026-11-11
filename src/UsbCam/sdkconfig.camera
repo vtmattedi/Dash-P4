@@ -23,7 +23,10 @@ CONFIG_ISP_PIPELINE_CONTROLLER_TASK_STACK_USE_PSRAM=y
 # Small allocations in PSRAM too. The default sends every allocation of 4 KB or less to internal RAM; LVGL (clib malloc),
 # std::string and most objects are small, so they filled it. Only allocations under 512 bytes stay internal now.
 # SPIRAM_MALLOC_RESERVE_INTERNAL (32 KB) still keeps a pool for internal-only requests.
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
+# 512 -> 128 once a real feed was seen (192 items): each cached FeedItem is a ~420-byte std::map node, which at 512
+# stayed internal (~80 KB for the whole feed, more than the ~60-86 KB free after Wi-Fi). Then 128 -> 64 in the memory pass
+# below: LVGL objects, styles and labels are 50-130 bytes each and there are well over a thousand of them.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=64
 
 # ESP-Hosted SDIO receive without "streaming mode". Streaming reads whatever the C6 has queued in one transfer and
 # allocates ONE internal DMA buffer that big (sdio_rx_get_buffer asserts when it cannot). With the camera firmware the
@@ -33,3 +36,23 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 # board/sdkconfig.board picks streaming for the other firmwares, which have the RAM for it.
 # CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE is not set
 CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_NONE=y
+
+# --- Memory pass (internal RAM was at 100 %) -------------------------------------------------------------------------
+# Measured on the built ELF (riscv32-esp-elf-size and the link map): 161 KB of internal RAM is code placed in IRAM, of
+# which LVGL alone is 61.6 KB, FreeRTOS 20.6 KB, esp_hw_support 19.9 KB, ringbuf 5.6 KB. Static data adds ~65 KB. Every KB
+# of it is a KB less for the heap, which is where Wi-Fi/ESP-Hosted, USB, the camera and the UI fight for ~330 KB.
+# Code and read-only data already run from PSRAM (SPIRAM_XIP_FROM_PSRAM), so moving more code out of IRAM costs a little
+# speed on the first run of a function and nothing on a cached hot loop.
+
+# LVGL's blend/draw hot paths in IRAM (-61 KB). They run from PSRAM through the 256 KB cache instead. If frame rate ever
+# suffers (the PC screen streaming while the UI animates), this is the first thing to put back (=y).
+CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=n
+
+# FreeRTOS and ring buffer: everything that is not ISR-safe runs from flash/PSRAM instead of IRAM (~12-15 KB and ~5 KB).
+# The ISR-safe variants (xQueueSendFromISR ...) stay in IRAM, which is all an interrupt handler may call.
+CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y
+
+# Sleep support in IRAM: this wall panel never sleeps.
+CONFIG_PM_SLEEP_FUNC_IN_IRAM=n
+CONFIG_PM_SLP_IRAM_OPT=n
