@@ -27,3 +27,6 @@ build
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Dumps of the real notification feed (private task and calendar data): never commit
+mw-notification-*snapshot*.json
