@@ -15,10 +15,8 @@ void PageCalendar_refresh(bool force);
 lv_obj_t *PageNetwork_create(lv_obj_t *parent);
 void PageNetwork_refresh(bool force);
 
-lv_obj_t *PageMonitor_create(lv_obj_t *parent);
-void PageMonitor_refresh(bool force);
-/// The page is being left: stop the "Capture all" firehose if it was on.
-void PageMonitor_leave();
+lv_obj_t *PageTasks_create(lv_obj_t *parent);
+void PageTasks_refresh(bool force);
 
 #if DASH_PC_SCREEN
 lv_obj_t *PagePc_create(lv_obj_t *parent);

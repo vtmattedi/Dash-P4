@@ -7,9 +7,9 @@
 enum UiPage
 {
     UI_PAGE_HOME = 0,
-    UI_PAGE_CALENDAR, // the feed's events by day, tasks and alerts
+    UI_PAGE_CALENDAR, // the feed's events and deadlines by day
+    UI_PAGE_TASKS,    // Linear and WOI tasks, filtered by source and status
     UI_PAGE_NETWORK,
-    UI_PAGE_MONITOR,
 #if DASH_PC_SCREEN
     UI_PAGE_PC, // the PC's display: opening the tab connects and shows it (PcLink_show)
 #endif

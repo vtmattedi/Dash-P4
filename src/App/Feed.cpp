@@ -22,6 +22,10 @@ void (*g_save)(const std::string &) = nullptr;
 std::vector<int64_t> g_visible;
 bool g_visibleDirty = true;
 
+void (*g_cacheSave)(const std::string &) = nullptr;
+bool g_cacheDirty = false;
+int64_t g_cacheDirtyAtMs = 0;
+
 std::mutex g_postMutex;
 std::vector<FeedDelta> g_posted;
 
@@ -258,6 +262,14 @@ bool Feed_apply(const FeedDelta &delta)
         }
     }
     g_version = delta.version;
+    if (itemsChanged)
+    {
+        if (!g_cacheDirty)
+        {
+            g_cacheDirtyAtMs = -1; // stamped by the next Feed_cacheTick, which owns the clock
+        }
+        g_cacheDirty = true;
+    }
 
     dismissalsChanged |= pruneDismissed();
     if (dismissalsChanged)
@@ -268,6 +280,94 @@ bool Feed_apply(const FeedDelta &delta)
     {
         changed();
     }
+    return true;
+}
+
+std::string Feed_serialize()
+{
+    JsonDocument doc;
+    doc["version"] = static_cast<long long>(g_version);
+    doc["epoch"] = g_epoch;
+    doc["full"] = true;
+    JsonArray items = doc["items"].to<JsonArray>();
+    for (const auto &entry : g_items)
+    {
+        const FeedItem &item = entry.second;
+        JsonObject o = items.add<JsonObject>();
+        o["numeric_id"] = static_cast<long long>(item.numericId);
+        o["id"] = item.id;
+        o["source"] = item.source;
+        o["kind"] = item.kind;
+        o["title"] = item.title;
+        if (!item.status.empty())
+        {
+            o["status"] = item.status;
+        }
+        if (!item.description.empty())
+        {
+            o["description"] = item.description;
+        }
+        if (!item.account.empty())
+        {
+            o["connection"]["alias"] = item.account;
+        }
+        if (!item.startsAt.empty())
+        {
+            o["starts_at"] = item.startsAt;
+        }
+        if (!item.endsAt.empty())
+        {
+            o["ends_at"] = item.endsAt;
+        }
+        if (!item.dueAt.empty())
+        {
+            o["due_at"] = item.dueAt;
+        }
+        if (!item.url.empty())
+        {
+            o["url"] = item.url;
+        }
+    }
+    std::string out;
+    serializeJson(doc, out);
+    return out;
+}
+
+bool Feed_restore(const std::string &json)
+{
+    FeedDelta delta;
+    if (!Feed_parse(json.data(), json.size(), delta))
+    {
+        return false;
+    }
+    delta.full = true;
+    if (!Feed_apply(delta))
+    {
+        return false;
+    }
+    g_cacheDirty = false; // what was just loaded is what is on flash
+    return true;
+}
+
+void Feed_setCacheSaver(void (*save)(const std::string &)) { g_cacheSave = save; }
+
+bool Feed_cacheTick(int64_t nowMs, int64_t debounceMs)
+{
+    if (!g_cacheDirty || !g_cacheSave)
+    {
+        return false;
+    }
+    if (g_cacheDirtyAtMs < 0)
+    {
+        g_cacheDirtyAtMs = nowMs; // the debounce starts when the change was first seen by a tick
+        return false;
+    }
+    if (nowMs - g_cacheDirtyAtMs < debounceMs)
+    {
+        return false;
+    }
+    g_cacheDirty = false;
+    g_cacheSave(Feed_serialize());
     return true;
 }
 
@@ -333,6 +433,7 @@ uint32_t Feed_revision() { return g_revision; }
 
 void Feed_clear()
 {
+    g_cacheDirty = false;
     g_items.clear();
     g_version = 0;
     g_epoch.clear();

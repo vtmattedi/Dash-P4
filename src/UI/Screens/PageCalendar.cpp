@@ -10,30 +10,26 @@
 #include "UI/Calendar/EventDetail.h"
 #include "UI/Theme.h"
 
-// Calendar: the feed's events laid out by day, and what needs doing beside them.
+// Calendar: the feed's events and deadlines laid out by day. (Tasks have their own page: PageTasks.)
 //
-//   +----------+----------------------------+--------------+
-//   | days     | the selected day's agenda  | Tasks and    |
-//   | (14)     | all-day first, then timed  | alerts, each |
-//   |          | tap a row for the detail   | with a  X    |
-//   +----------+----------------------------+--------------+
+//   +----------+---------------------------------------------+
+//   | days     | the selected day's agenda                   |
+//   | (14)     | all-day first, then timed; WOI deadlines    |
+//   |          | tap a row for the detail                    |
+//   +----------+---------------------------------------------+
 //
-// The day column is built once and only has its text updated. The agenda and the task list are rebuilt (they are
-// short) whenever the calendar changed, the selected day changed, or the minute turned (so "happening now" and
-// "already over" stay true).
+// The day column is built once and only has its text updated. The agenda is rebuilt (it is short) whenever the
+// calendar changed, the selected day changed, or the minute turned (so "happening now" and "already over" stay true).
 
 namespace
 {
 constexpr int kDays = 14; // the server's default window: one day back, 14 ahead
 constexpr int32_t kDayColW = 210;
-constexpr int32_t kAgendaW = 420;
-constexpr int32_t kSideW = 234;
 
 lv_obj_t *g_dayRow[kDays];
 lv_obj_t *g_dayLabel[kDays];
 lv_obj_t *g_dayCount[kDays];
 lv_obj_t *g_agendaTitle, *g_agendaSub, *g_agendaList;
-lv_obj_t *g_sideTitle, *g_sideList;
 
 int g_selected = 0; // offset from today
 // What the lists were last built for. Any change (or g_dirty) rebuilds them.
@@ -76,13 +72,6 @@ void onDay(lv_event_t *e)
 void onOpen(lv_event_t *e)
 {
     EventDetail_open(static_cast<int64_t>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e))));
-}
-
-void onDismiss(lv_event_t *e)
-{
-    Feed_dismiss(static_cast<int64_t>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e))));
-    // Not rebuilt here: this row is the one being pressed. The page timer rebuilds it a moment later.
-    g_dirty = true;
 }
 
 lv_obj_t *tappableRow(lv_obj_t *parent, int64_t id, bool highlighted)
@@ -183,55 +172,6 @@ void buildAgenda(int64_t now)
     }
 }
 
-void buildSide(int64_t now)
-{
-    lv_obj_clean(g_sideList);
-    const auto items = Cal_attention();
-    char title[32];
-    snprintf(title, sizeof(title), items.empty() ? "Down and todos" : "Down and todos  (%u)",
-             static_cast<unsigned>(items.size()));
-    Theme_setText(g_sideTitle, title);
-
-    if (items.empty())
-    {
-        lv_obj_t *empty = Theme_label(g_sideList, "All clear.", UI_FONT_M, UI_COL_TEXT_FAINT);
-        lv_obj_set_width(empty, lv_pct(100));
-        return;
-    }
-    for (const FeedItem *item : items)
-    {
-        lv_obj_t *row = tappableRow(g_sideList, item->numericId, false);
-        lv_obj_set_style_pad_all(row, 8, 0);
-        lv_obj_set_style_pad_gap(row, 8, 0);
-
-        lv_obj_t *text = Theme_column(row, 0, LV_SIZE_CONTENT);
-        lv_obj_set_flex_grow(text, 1);
-        lv_obj_set_style_pad_gap(text, 2, 0);
-        lv_obj_t *label = Theme_label(text, item->title.empty() ? item->id.c_str() : item->title.c_str(), UI_FONT_M,
-                                      UI_COL_TEXT);
-        lv_obj_set_width(label, lv_pct(100));
-
-        char due[32];
-        CalFmt_due(*item, now, due, sizeof(due));
-        std::string sub = item->source;
-        if (due[0])
-        {
-            sub += "  \xE2\x80\xA2  " + std::string(due);
-        }
-        const bool isDown = item->kind == "service";
-        if (isDown)
-        {
-            sub = "DOWN  \xE2\x80\xA2  " + sub;
-        }
-        const bool overdue = strcmp(due, "overdue") == 0;
-        Theme_label(text, sub.c_str(), UI_FONT_S, overdue || isDown ? UI_COL_DANGER : UI_COL_TEXT_DIM);
-
-        lv_obj_t *x = Theme_iconButton(row, LV_SYMBOL_CLOSE, 40);
-        lv_obj_add_event_cb(x, onDismiss, LV_EVENT_CLICKED,
-                            reinterpret_cast<void *>(static_cast<intptr_t>(item->numericId)));
-    }
-}
-
 lv_obj_t *scrollList(lv_obj_t *parent)
 {
     lv_obj_t *list = Theme_column(parent, lv_pct(100), 0);
@@ -273,17 +213,12 @@ lv_obj_t *PageCalendar_create(lv_obj_t *parent)
     }
 
     // The selected day.
-    lv_obj_t *agenda = Theme_card(page, kAgendaW, lv_pct(100));
+    lv_obj_t *agenda = Theme_card(page, 0, lv_pct(100));
+    lv_obj_set_flex_grow(agenda, 1);
     lv_obj_set_style_pad_gap(agenda, 6, 0);
     g_agendaTitle = Theme_label(agenda, "", UI_FONT_XL, UI_COL_TEXT);
     g_agendaSub = Theme_label(agenda, "", UI_FONT_S, UI_COL_TEXT_DIM);
     g_agendaList = scrollList(agenda);
-
-    // Tasks and alerts.
-    lv_obj_t *side = Theme_card(page, kSideW, lv_pct(100));
-    lv_obj_set_style_pad_gap(side, 8, 0);
-    g_sideTitle = Theme_label(side, "Tasks and alerts", UI_FONT_L, UI_COL_TEXT);
-    g_sideList = scrollList(side);
 
     PageCalendar_refresh(true);
     return page;
@@ -304,5 +239,4 @@ void PageCalendar_refresh(bool force)
     g_builtMinute = minute;
     restyleDays(now);
     buildAgenda(now);
-    buildSide(now);
 }

@@ -5,6 +5,7 @@
 
 #include "App/Notifications.h"
 #include "NotificationCentre.h"
+#include "Rest.h"
 #include "StatusIcons.h"
 #include "Theme.h"
 #if DASH_PC_SCREEN
@@ -24,10 +25,38 @@ lv_obj_t *g_pc; // "show the PC" -- only while the PC streams and is not on the 
 #endif
 }
 
+// The global way back to the rest screen, on every page: swipe down from the status bar. (The way out of it is the
+// swipe up from the bottom edge of the rest screen.)
+namespace
+{
+constexpr int kRestSwipePx = 70;
+int32_t g_swipeStartY = 0;
+
+void onBarPress(lv_event_t *)
+{
+    lv_point_t p = {0, 0};
+    lv_indev_get_point(lv_indev_active(), &p);
+    g_swipeStartY = p.y;
+}
+
+void onBarRelease(lv_event_t *)
+{
+    lv_point_t p = {0, 0};
+    lv_indev_get_point(lv_indev_active(), &p);
+    if (p.y - g_swipeStartY >= kRestSwipePx)
+    {
+        Rest_now();
+    }
+}
+} // namespace
+
 lv_obj_t *StatusBar_create(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
     Theme_plain(bar);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(bar, onBarPress, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(bar, onBarRelease, LV_EVENT_RELEASED, nullptr);
     lv_obj_set_size(bar, BOARD_LCD_H_RES, UI_STATUSBAR_H);
     lv_obj_set_pos(bar, 0, 0);
     lv_obj_set_style_bg_color(bar, UI_COL_SURFACE, 0);

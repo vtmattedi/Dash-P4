@@ -1,5 +1,4 @@
 #include "Ui.h"
-#include "Explorer/TopicTap.h"
 
 #include <stdio.h>
 
@@ -27,8 +26,8 @@ struct PageDef
 const PageDef kPages[UI_PAGE_COUNT] = {
     {"Home", LV_SYMBOL_HOME, "Home", PageHome_create, PageHome_refresh},
     {"Calendar", LV_SYMBOL_LIST, "Calendar", PageCalendar_create, PageCalendar_refresh},
+    {"Tasks", LV_SYMBOL_OK, "Tasks", PageTasks_create, PageTasks_refresh},
     {"Network", LV_SYMBOL_WIFI, "Network", PageNetwork_create, PageNetwork_refresh},
-    {"Monitor", LV_SYMBOL_EYE_OPEN, "Monitor", PageMonitor_create, PageMonitor_refresh},
 #if DASH_PC_SCREEN
     {"PC screen", LV_SYMBOL_IMAGE, "PC", PagePc_create, PagePc_refresh},
 #endif
@@ -270,15 +269,6 @@ void Ui_show(UiPage page)
             PageCamera_leave(); // the camera stops once nothing else wants it
         }
 #endif
-        if (previous == UI_PAGE_MONITOR)
-        {
-            PageMonitor_leave();
-            Tap_release(); // the tail is only kept while the monitor is on screen
-        }
-    }
-    if (page == UI_PAGE_MONITOR && previous != page)
-    {
-        Tap_acquire();
     }
     lv_obj_remove_flag(g_pageBox[page], LV_OBJ_FLAG_HIDDEN);
     styleTab(page);

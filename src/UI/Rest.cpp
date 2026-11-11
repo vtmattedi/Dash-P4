@@ -12,6 +12,8 @@
 #include "App/Net.h"
 #include "App/Prefs.h"
 #include "Calendar/CalFormat.h"
+#include "Calendar/EventDetail.h"
+#include "Calendar/StackportSheet.h"
 #include "Modal.h"
 #include "StatusIcons.h"
 #include "Theme.h"
@@ -21,7 +23,9 @@
 LV_FONT_DECLARE(font_clock_200);
 LV_IMAGE_DECLARE(img_mw_logo);
 
-// The resting screen: a black wall display. Layout (1024 x 600):
+// The resting screen: a black wall display you can also touch. Tap the calendar to open it in the app, tap the Stackport
+// card for the service list; swipe up from the bottom edge to unlock. A first touch only brightens the screen (it dims
+// again after a quiet spell), so a stray touch never opens the app. Layout (1024 x 600):
 //
 //   +-----------------------------------------------------------+
 //   | problems (left)                           status icons    |  top bar
@@ -38,6 +42,7 @@ LV_IMAGE_DECLARE(img_mw_logo);
 namespace
 {
 lv_obj_t *g_root;
+lv_obj_t *g_canvas; // where the build functions below draw: the root
 // The clock is five cells of fixed width: the font is proportional (a 1 is much narrower than a 0), so one label would
 // shift sideways every minute and make the colon dance. Cells 0,1 = hours, 2 = colon, 3,4 = minutes.
 constexpr int kDigitCell = 136; // widest digit of font_clock_200 (advance 2141/16) plus a little air
@@ -78,6 +83,16 @@ struct LaterRow
     lv_obj_t *root, *bar, *time, *title;
 };
 LaterRow g_later[kLaterRows];
+
+int64_t g_nowId = 0, g_nextId = 0; // the feed item behind the NOW line and the NEXT card (0: none)
+int64_t g_laterId[kLaterRows];
+int64_t g_todoId[kTodoRows];
+int32_t g_pressY = 0;
+uint32_t g_restStart = 0; // lv_tick when the rest screen came up
+bool g_bright = false;    // a touch brightened the screen; it dims after kDimAfterMs without one
+constexpr uint32_t kDimAfterMs = 15000;
+constexpr int kUnlockSwipePx = 90;
+constexpr int kZoneH = 70;
 
 bool g_resting = false;
 bool g_forced = false; // Rest_now(): rest even with the timeout set to never
@@ -184,6 +199,10 @@ void refreshTopBar()
     {
         problems = "Feed: " + feed.message;
     }
+    else if (feed.message != "ok" && Feed_total() > 0)
+    {
+        problems = "Saved data, syncing"; // restored from flash; nothing fetched yet this boot
+    }
     Theme_setText(g_problems, problems.c_str());
 
     StatusIcons_refresh(g_icons);
@@ -248,6 +267,7 @@ void refreshTodos(int64_t now)
     for (int i = 0; i < kTodoRows; ++i)
     {
         TodoRow &row = g_todo[i];
+        g_todoId[i] = i < static_cast<int>(todos.size()) ? todos[i]->numericId : 0;
         if (i >= static_cast<int>(todos.size()))
         {
             show(row.root, i == 0 && todos.empty());
@@ -310,6 +330,8 @@ void refreshCalendar(int64_t now)
             }
         }
     }
+    g_nowId = current ? current->numericId : allDay ? allDay->numericId : 0;
+    g_nextId = next ? next->numericId : 0;
     char buf[96];
     if (current)
     {
@@ -390,6 +412,7 @@ void refreshCalendar(int64_t now)
     }
     for (int i = 0; i < kLaterRows; ++i)
     {
+        g_laterId[i] = i < static_cast<int>(later.size()) ? later[i]->numericId : 0;
         if (i >= static_cast<int>(later.size()))
         {
             setLater(g_later[i], false);
@@ -411,6 +434,55 @@ void refreshCalendar(int64_t now)
         }
         setLater(g_later[i], true, CalFmt_accountColour(e.account), time, e.title.c_str());
     }
+}
+
+// ---------------------------------------------------------------- pager pages 1 and 2
+
+void unlockNow()
+{
+    void (*after)() = g_afterTouchWake;
+    Rest_wake(); // clears the hook
+    if (after)
+    {
+        after();
+    }
+}
+
+void onZonePress(lv_event_t *)
+{
+    lv_point_t p = {0, 0};
+    lv_indev_get_point(lv_indev_active(), &p);
+    g_pressY = p.y;
+}
+
+void onZoneRelease(lv_event_t *)
+{
+    lv_point_t p = {0, 0};
+    lv_indev_get_point(lv_indev_active(), &p);
+    if (g_pressY - p.y >= kUnlockSwipePx)
+    {
+        unlockNow();
+    }
+}
+
+// A tap on something with a feed item behind it opens its detail. Modals are created after the rest screen, so they
+// appear above it: the rest screen stays up underneath.
+void onOpenItem(lv_event_t *e)
+{
+    const int64_t id = *static_cast<const int64_t *>(lv_event_get_user_data(e));
+    if (id != 0)
+    {
+        EventDetail_open(id);
+    }
+}
+
+void onOpenStackport(lv_event_t *) { StackportSheet_open(); }
+
+void makeTappable(lv_obj_t *obj, const int64_t *idSlot)
+{
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(obj, 6);
+    lv_obj_add_event_cb(obj, onOpenItem, LV_EVENT_CLICKED, const_cast<int64_t *>(idSlot));
 }
 
 void refresh()
@@ -444,6 +516,8 @@ void goToRest()
         return;
     }
     g_resting = true;
+    g_restStart = lv_tick_get();
+    g_bright = false;
     Modal_closeAll();
     Toast_setSuppressed(true);
     refresh();
@@ -453,20 +527,18 @@ void goToRest()
     board_set_backlight(static_cast<uint8_t>(Prefs_get().blRest));
 }
 
-void onTouch(lv_event_t *)
-{
-    void (*after)() = g_afterTouchWake;
-    Rest_wake(); // clears the hook
-    if (after)
-    {
-        after();
-    }
-}
-
 void onTick(lv_timer_t *)
 {
     if (g_resting)
     {
+        // A touch brightens the screen but leaves the rest view; it dims again after a quiet spell.
+        const uint32_t idle = lv_display_get_inactive_time(nullptr);
+        const bool bright = idle < lv_tick_elaps(g_restStart) && idle < kDimAfterMs;
+        if (bright != g_bright)
+        {
+            g_bright = bright;
+            board_set_backlight(static_cast<uint8_t>(bright ? Prefs_get().blActive : Prefs_get().blRest));
+        }
         refresh();
         return;
     }
@@ -495,7 +567,7 @@ void buildTopBar()
 
 void buildClock(int clockY, int dateY)
 {
-    lv_obj_t *clockBox = lv_obj_create(g_root);
+    lv_obj_t *clockBox = lv_obj_create(g_canvas);
     Theme_plain(clockBox);
     lv_obj_set_size(clockBox, kClockWidth, lv_font_get_line_height(&font_clock_200));
     lv_obj_remove_flag(clockBox, LV_OBJ_FLAG_SCROLLABLE);
@@ -509,7 +581,7 @@ void buildClock(int clockY, int dateY)
         lv_obj_set_pos(g_clockCell[i], kCellCentre[i] - cell / 2, 0);
     }
     // Centred under the clock, with air between them.
-    g_date = Theme_label(g_root, "", UI_FONT_XL, UI_COL_TEXT_DIM);
+    g_date = Theme_label(g_canvas, "", UI_FONT_XL, UI_COL_TEXT_DIM);
     lv_obj_set_width(g_date, kClockWidth);
     lv_obj_set_style_text_align(g_date, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(g_date, LV_ALIGN_TOP_LEFT, kLeftX, dateY);
@@ -517,7 +589,9 @@ void buildClock(int clockY, int dateY)
 
 void buildStackport(int y)
 {
-    g_stackPanel = panel(g_root, kLeftX + 24, y, kClockWidth - 48, 64);
+    g_stackPanel = panel(g_canvas, kLeftX + 24, y, kClockWidth - 48, 64);
+    lv_obj_add_flag(g_stackPanel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(g_stackPanel, onOpenStackport, LV_EVENT_CLICKED, nullptr);
     // An arc that fills with the share of services that are up; the number inside is how many are.
     g_stackArc = lv_arc_create(g_stackPanel);
     lv_obj_set_size(g_stackArc, 52, 52);
@@ -547,13 +621,14 @@ void buildStackport(int y)
 void buildTodos(int y)
 {
     const int x = kLeftX + 24, w = kClockWidth - 48;
-    g_todoHeader = Theme_label(g_root, "TODO", UI_FONT_S, UI_COL_TEXT_FAINT);
+    g_todoHeader = Theme_label(g_canvas, "TODO", UI_FONT_S, UI_COL_TEXT_FAINT);
     lv_obj_set_pos(g_todoHeader, x + 2, y);
     for (int i = 0; i < kTodoRows; ++i)
     {
         TodoRow &row = g_todo[i];
-        row.root = lv_obj_create(g_root);
+        row.root = lv_obj_create(g_canvas);
         Theme_plain(row.root);
+        makeTappable(row.root, &g_todoId[i]);
         lv_obj_set_size(row.root, w, 30);
         lv_obj_set_pos(row.root, x, y + 22 + i * 31);
         lv_obj_set_flex_flow(row.root, LV_FLEX_FLOW_ROW);
@@ -573,16 +648,18 @@ void buildCalendar()
 {
     int y = kBarH + 8;
     // NOW line.
-    g_nowTag = Theme_label(g_root, "NOW", UI_FONT_S, UI_COL_TEXT_FAINT);
+    g_nowTag = Theme_label(g_canvas, "NOW", UI_FONT_S, UI_COL_TEXT_FAINT);
     lv_obj_set_pos(g_nowTag, kRightX + 2, y + 6);
-    g_nowText = lineLabel(g_root, UI_FONT_L, UI_COL_TEXT_FAINT);
+    g_nowText = lineLabel(g_canvas, UI_FONT_L, UI_COL_TEXT_FAINT);
+    makeTappable(g_nowText, &g_nowId);
     lv_obj_set_width(g_nowText, kRightW - 64);
     lv_obj_set_pos(g_nowText, kRightX + 64, y + 2);
     y += 36;
 
     // The big NEXT card.
     constexpr int kNextH = 224;
-    g_nextPanel = panel(g_root, kRightX, y, kRightW, kNextH);
+    g_nextPanel = panel(g_canvas, kRightX, y, kRightW, kNextH);
+    makeTappable(g_nextPanel, &g_nextId);
     g_nextBar = bar(g_nextPanel, 6, kNextH - 36);
     lv_obj_align(g_nextBar, LV_ALIGN_LEFT_MID, 12, 0);
     g_nextTag = Theme_label(g_nextPanel, "NEXT", UI_FONT_S, UI_COL_TEXT_FAINT);
@@ -605,14 +682,15 @@ void buildCalendar()
     y += kNextH + 14;
 
     // What follows.
-    g_laterHeader = Theme_label(g_root, "THEN", UI_FONT_S, UI_COL_TEXT_FAINT);
+    g_laterHeader = Theme_label(g_canvas, "THEN", UI_FONT_S, UI_COL_TEXT_FAINT);
     lv_obj_set_pos(g_laterHeader, kRightX + 2, y);
     y += 22;
     for (int i = 0; i < kLaterRows; ++i)
     {
         LaterRow &row = g_later[i];
-        row.root = lv_obj_create(g_root);
+        row.root = lv_obj_create(g_canvas);
         Theme_plain(row.root);
+        makeTappable(row.root, &g_laterId[i]);
         lv_obj_set_size(row.root, kRightW, 44);
         lv_obj_set_pos(row.root, kRightX, y + i * 46);
         lv_obj_set_flex_flow(row.root, LV_FLEX_FLOW_ROW);
@@ -637,7 +715,6 @@ void Rest_begin()
     lv_obj_set_style_bg_opa(g_root, LV_OPA_COVER, 0);
     lv_obj_add_flag(g_root, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(g_root, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(g_root, onTouch, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_flag(g_root, LV_OBJ_FLAG_HIDDEN);
 
     // Vertical rhythm of the left column: clock, a gap, the date, a gap, then stackport and the todos.
@@ -655,11 +732,30 @@ void Rest_begin()
     lv_obj_remove_flag(logo, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_align(logo, LV_ALIGN_CENTER, 0, 20); // the middle of the screen, 480 px tall
 
+    g_canvas = g_root;
+
     buildTopBar();
     buildClock(clockY, dateY);
     buildStackport(stackY);
     buildTodos(todoY);
     buildCalendar();
+
+    // The unlock edge: a swipe up that starts in the bottom strip. The pill is only a hint.
+    lv_obj_t *zone = lv_obj_create(g_root);
+    Theme_plain(zone);
+    lv_obj_set_size(zone, BOARD_LCD_H_RES, kZoneH);
+    lv_obj_align(zone, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_add_flag(zone, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(zone, onZonePress, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(zone, onZoneRelease, LV_EVENT_RELEASED, nullptr);
+    lv_obj_t *pill = lv_obj_create(zone);
+    lv_obj_remove_style_all(pill);
+    lv_obj_set_size(pill, 140, 6);
+    lv_obj_set_style_radius(pill, 3, 0);
+    lv_obj_set_style_bg_color(pill, UI_COL_TEXT_FAINT, 0);
+    lv_obj_set_style_bg_opa(pill, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(pill, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(pill, LV_ALIGN_BOTTOM_MID, 0, -12);
 
     lv_timer_create(onTick, 500, nullptr);
 }

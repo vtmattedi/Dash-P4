@@ -59,6 +59,22 @@ const CalEntry *Cal_next(int64_t now);
 /// A WOI task with a due date is also a calendar deadline. Not dismissed.
 std::vector<const FeedItem *> Cal_todos();
 
+/// Where a task is at, collapsed to the three columns of the Tasks board. Linear sends its state type (triage, backlog,
+/// unstarted, started) and WOI todo / in_progress; anything with "review" in its status (a state name the server may
+/// send later) is Review, because Linear's "In Review" state is of type "started" and cannot be told apart by type.
+enum class TaskGroup : uint8_t
+{
+    Todo,  // todo, unstarted, backlog, triage, anything unknown
+    Doing, // in_progress, started
+    Review // status mentions "review"
+};
+TaskGroup Cal_taskGroup(const FeedItem &item);
+const char *Cal_taskGroupName(TaskGroup group); // "To do", "Doing", "Review"
+
+/// The Tasks page's list: Cal_todos() narrowed to one source ("linear", "woi"; empty = any) and one group
+/// (-1 = any, else a TaskGroup value). Same order as Cal_todos().
+std::vector<const FeedItem *> Cal_tasks(const std::string &source, int group);
+
 /// How many services the feed knows about and how many of them are down (Stackport watcher).
 struct ServiceSummary
 {

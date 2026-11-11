@@ -10,7 +10,9 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 
 #include "creds.h"
@@ -26,7 +28,9 @@ static const char *TAG = "feed";
 
 namespace
 {
-constexpr uint32_t kPollMs = 30000;
+// The background poll is slow on purpose: the saved cache makes power-up instant, "Sync now" makes a refresh instant, and
+// a wall calendar does not need to be fresher than a few minutes. (Was 30 s before the cache existed.)
+constexpr uint32_t kPollMs = 5 * 60 * 1000;
 constexpr uint32_t kRetryMs = 60000;      // after any failure
 constexpr uint32_t kFirstPollMs = 8000;   // let Wi-Fi come up
 constexpr size_t kMaxBody = 512 * 1024;   // a runaway answer must not eat the PSRAM
@@ -170,10 +174,13 @@ Outcome pollOnce(int64_t &version, std::string &epoch)
     return outcome;
 }
 
+int64_t g_startVersion = 0; // the cache's cursor at start-up (FeedSync_begin copies it on the LVGL task)
+std::string g_startEpoch;
+
 void feedTask(void *)
 {
-    int64_t version = 0;
-    std::string epoch;
+    int64_t version = g_startVersion;
+    std::string epoch = g_startEpoch;
     uint32_t waitMs = kFirstPollMs;
 
     while (true)
@@ -219,6 +226,8 @@ void feedTask(void *)
 
 void FeedSync_begin()
 {
+    g_startVersion = Feed_version();
+    g_startEpoch = Feed_epoch();
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_token = PersistentSettings.get(kTokenKey, "");
@@ -227,8 +236,14 @@ void FeedSync_begin()
             g_token = NOTIF_API_TOKEN;
         }
     }
-    // TLS handshake plus a JSON body: 10 KB of stack, like the OTA task's needs.
-    xTaskCreate(feedTask, "feed", 10240, nullptr, 2, &g_task);
+    // TLS handshake plus a JSON body: 10 KB of stack. The stack lives in PSRAM: internal RAM is the scarce resource
+    // (the PC-screen + camera build has ~57 KB free once Wi-Fi is up, and ESP-Hosted asserts when its SDIO receive
+    // buffer cannot be allocated). This task never writes flash itself (dismissals are saved by the LVGL task), which
+    // is what a PSRAM stack must not do.
+    if (xTaskCreateWithCaps(feedTask, "feed", 10240, nullptr, 2, &g_task, MALLOC_CAP_SPIRAM) != pdPASS)
+    {
+        xTaskCreate(feedTask, "feed", 10240, nullptr, 2, &g_task);
+    }
 }
 
 void FeedSync_setToken(const std::string &newToken)

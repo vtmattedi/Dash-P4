@@ -1,5 +1,7 @@
 #include "Calendar.h"
 
+#include <ctype.h>
+
 #include <algorithm>
 #include <stdlib.h>
 #include <string.h>
@@ -263,6 +265,51 @@ std::vector<const FeedItem *> Cal_todos()
     for (const auto &r : ranked)
     {
         out.push_back(r.second);
+    }
+    return out;
+}
+
+TaskGroup Cal_taskGroup(const FeedItem &item)
+{
+    std::string s = item.status;
+    for (char &c : s)
+    {
+        c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    }
+    if (s.find("review") != std::string::npos)
+    {
+        return TaskGroup::Review;
+    }
+    if (s == "in_progress" || s == "started")
+    {
+        return TaskGroup::Doing;
+    }
+    return TaskGroup::Todo;
+}
+
+const char *Cal_taskGroupName(TaskGroup group)
+{
+    switch (group)
+    {
+    case TaskGroup::Doing:
+        return "Doing";
+    case TaskGroup::Review:
+        return "Review";
+    default:
+        return "To do";
+    }
+}
+
+std::vector<const FeedItem *> Cal_tasks(const std::string &source, int group)
+{
+    std::vector<const FeedItem *> out;
+    for (const FeedItem *item : Cal_todos())
+    {
+        if ((source.empty() || item->source == source) &&
+            (group < 0 || static_cast<int>(Cal_taskGroup(*item)) == group))
+        {
+            out.push_back(item);
+        }
     }
     return out;
 }

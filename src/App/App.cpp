@@ -1,6 +1,11 @@
 #include "App.h"
 
 #include <NightMare.h>
+#include <Core/Storage.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <atomic>
+#include <string>
 
 #include "board.h"
 #include "esp_log.h"
@@ -430,6 +435,45 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
 
 #pragma endregion
 
+// ---- The saved feed (Feed_restore / Feed_cacheTick). A snapshot is written to the data partition from a one-shot task:
+// flash writes stall the caller for tens to hundreds of ms, which the LVGL task (and the USB screen with it) must not
+// sit through. The task needs an internal-RAM stack because it touches flash.
+static constexpr const char *kFeedCacheFile = "/feed_cache.json";
+static constexpr size_t kFeedCacheMaxBytes = 256 * 1024;
+static constexpr int64_t kFeedCacheDebounceMs = 30000;
+static const char *TAG_FEEDCACHE = "feedcache";
+static std::atomic<bool> g_feedCacheWriting{false};
+
+static void feedCacheWriter(void *arg)
+{
+    std::string *text = static_cast<std::string *>(arg);
+    const bool ok = NightMare::Storage::write(kFeedCacheFile, *text, true);
+    ESP_LOGI(TAG_FEEDCACHE, "saved %u bytes: %s", static_cast<unsigned>(text->size()), ok ? "ok" : "FAILED");
+    delete text;
+    g_feedCacheWriting = false;
+    vTaskDelete(nullptr);
+}
+
+static void saveFeedCache(const std::string &snapshot)
+{
+    if (snapshot.size() > kFeedCacheMaxBytes)
+    {
+        ESP_LOGW(TAG_FEEDCACHE, "snapshot is %u bytes, over the %u limit: not saved", static_cast<unsigned>(snapshot.size()),
+                 static_cast<unsigned>(kFeedCacheMaxBytes));
+        return;
+    }
+    if (g_feedCacheWriting.exchange(true))
+    {
+        return; // the previous save is still running; the next change saves again
+    }
+    std::string *copy = new std::string(snapshot);
+    if (xTaskCreate(feedCacheWriter, "feedsave", 6144, copy, 1, nullptr) != pdPASS)
+    {
+        delete copy;
+        g_feedCacheWriting = false;
+    }
+}
+
 static bool g_settingsLoaded = false;
 
 static void housekeepingTimer(lv_timer_t *)
@@ -445,6 +489,7 @@ static void housekeepingTimer(lv_timer_t *)
     {
         FeedSync_resync(); // a patch for another stream than the cache: start over from version 0
     }
+    Feed_cacheTick(esp_timer_get_time() / 1000, kFeedCacheDebounceMs);
 
     // While bringing the display up: say whether LVGL is actually completing frames.
     static uint32_t lastReportMs = 0;
@@ -528,6 +573,16 @@ void App_loadSettings()
     LightControl_begin();
     Feed_begin(PersistentSettings.get("feed_dismissed", ""),
                [](const std::string &text) { PersistentSettings.set("feed_dismissed", text); });
+    // The saved feed: shown at once, and the sync task resumes from its cursor (FeedSync_begin reads it).
+    {
+        std::string saved;
+        if (NightMare::Storage::read(kFeedCacheFile, saved, kFeedCacheMaxBytes) && Feed_restore(saved))
+        {
+            ESP_LOGI(TAG_FEEDCACHE, "restored %u items (version %lld) from flash", static_cast<unsigned>(Feed_total()),
+                     static_cast<long long>(Feed_version()));
+        }
+    }
+    Feed_setCacheSaver(saveFeedCache);
     FeedSync_begin();
     Battery_begin();
     g_settingsLoaded = true;

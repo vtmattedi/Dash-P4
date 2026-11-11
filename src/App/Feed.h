@@ -89,5 +89,25 @@ void Feed_dismissAll();
 /// Bumped whenever the visible list changes.
 uint32_t Feed_revision();
 
+// --- The saved cache ----------------------------------------------------------------------------------------------
+// The panel keeps the last feed on flash so it shows something the moment it powers up (and while offline), and so the
+// first request after boot is a small delta from the saved cursor instead of the whole feed. The snapshot has the
+// shape of a full server response (version, epoch, full, items), so Feed_parse reads it back. The file itself is
+// written by the caller (flash I/O does not belong in this pure model): see Feed_setCacheSaver.
+
+/// The whole cache as a JSON snapshot.
+std::string Feed_serialize();
+
+/// Load a snapshot made by Feed_serialize into an empty cache. False (cache untouched) when it does not parse. Does
+/// not count as a change to save.
+bool Feed_restore(const std::string &json);
+
+/// `save` is called with a fresh snapshot by Feed_cacheTick(). Items changed since the last save mark the cache dirty.
+void Feed_setCacheSaver(void (*save)(const std::string &));
+
+/// Call from a timer (LVGL task) with a millisecond clock. Writes a snapshot once the cache has been dirty for
+/// `debounceMs` (a burst of changes becomes one write). Returns true when it saved.
+bool Feed_cacheTick(int64_t nowMs, int64_t debounceMs);
+
 /// Forget the cache (not the dismissals). For tests and for "reset_required".
 void Feed_clear();

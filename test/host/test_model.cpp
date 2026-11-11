@@ -856,6 +856,21 @@ static void testCalendar()
         CHECK(todos.size() == 5 && todos[0]->title == "Doing" && todos[1]->title == "Ship it" &&
               todos[2]->title == "Soon");
     }
+    CHECK(Cal_tasks("", -1).size() == 5);
+    CHECK(Cal_tasks("linear", -1).size() == 3 && Cal_tasks("woi", -1).size() == 2);
+    CHECK(Cal_tasks("", static_cast<int>(TaskGroup::Doing)).size() == 1);
+    CHECK(Cal_tasks("linear", static_cast<int>(TaskGroup::Todo)).size() == 2); // "Someday", "Soon"
+    CHECK(Cal_tasks("", static_cast<int>(TaskGroup::Review)).empty());
+    CHECK(std::string(Cal_taskGroupName(TaskGroup::Review)) == "Review");
+    {
+        FeedItem review;
+        review.status = "In Review";
+        CHECK(Cal_taskGroup(review) == TaskGroup::Review);
+        review.status = "backlog";
+        CHECK(Cal_taskGroup(review) == TaskGroup::Todo);
+        review.status = "started";
+        CHECK(Cal_taskGroup(review) == TaskGroup::Doing);
+    }
     CHECK(Cal_alerts().size() == 1 && Cal_alerts()[0]->title == "Down"); // "up" services are not alerts
     CHECK(Cal_services().total == 2 && Cal_services().down == 1);
 
@@ -880,6 +895,50 @@ static void testCalendar()
     CHECK(Cal_todos().size() == 3);
 }
 
+void testFeedCache()
+{
+    Feed_clear();
+    Feed_begin("", feedSave);
+    FeedDelta d = parseOk(R"({"version":5,"epoch":"e1","full":true,"items":[
+      {"numeric_id":1,"id":"l:1","source":"linear","kind":"task","title":"Pão à noite","status":"todo","due_at":"2026-11-12","connection":{"alias":"Work"}},
+      {"numeric_id":2,"id":"g:2","source":"google_calendar","kind":"event","title":"Standup","starts_at":"2026-11-12T14:00:00-03:00","ends_at":"2026-11-12T14:30:00-03:00"}]})");
+    CHECK(Feed_apply(d));
+
+    // snapshot -> empty cache -> restore: same content, same cursor
+    const std::string snapshot = Feed_serialize();
+    Feed_clear();
+    CHECK(Feed_total() == 0);
+    CHECK(Feed_restore(snapshot));
+    CHECK(Feed_total() == 2 && Feed_version() == 5 && Feed_epoch() == "e1");
+    CHECK(Feed_find(1) && Feed_find(1)->title == "P\xC3\xA3o \xC3\xA0 noite" && Feed_find(1)->account == "Work" &&
+          Feed_find(1)->dueAt == "2026-11-12" && Feed_find(1)->status == "todo");
+    CHECK(Feed_find(2) && Feed_find(2)->startsAt == "2026-11-12T14:00:00-03:00");
+    CHECK(!Feed_restore("garbage") && Feed_total() == 2); // a bad file leaves the cache alone
+
+    // the saver: one write per burst of changes, none for what was just restored
+    static int saves;
+    static std::string last;
+    saves = 0;
+    Feed_setCacheSaver([](const std::string &text) {
+        ++saves;
+        last = text;
+    });
+    CHECK(!Feed_cacheTick(1000, 30000)); // restore left it clean
+    FeedDelta patch = parseOk(R"({"version":6,"epoch":"e1","items":[{"numeric_id":3,"id":"l:3","source":"linear","kind":"task","title":"New"}]})");
+    CHECK(Feed_apply(patch));
+    CHECK(!Feed_cacheTick(2000, 30000));  // first sight of the change: the debounce starts
+    CHECK(!Feed_cacheTick(20000, 30000)); // too soon
+    CHECK(Feed_cacheTick(33000, 30000) && saves == 1);
+    CHECK(!Feed_cacheTick(99000, 30000) && saves == 1); // clean again
+    FeedDelta same = parseOk(R"({"version":7,"epoch":"e1","items":[{"numeric_id":3,"id":"l:3","source":"linear","kind":"task","title":"New"}]})");
+    CHECK(Feed_apply(same));
+    CHECK(!Feed_cacheTick(200000, 30000) && saves == 1); // an identical item is not a change
+    // what was saved restores the same cache
+    Feed_clear();
+    CHECK(Feed_restore(last) && Feed_total() == 3 && Feed_version() == 6);
+    Feed_setCacheSaver(nullptr);
+}
+
 void testBattery()
 {
     CHECK(Battery_percentFromPinMv(2450) == 100 && Battery_percentFromPinMv(2200) == 0);
@@ -902,6 +961,7 @@ int main()
     testDeviceView();
     testFeed();
     testCalendar();
+    testFeedCache();
     testBattery();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
