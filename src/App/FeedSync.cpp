@@ -6,6 +6,7 @@
 #include <NightMare.h>
 
 #include "Feed.h"
+#include "Net.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -196,6 +197,13 @@ void feedTask(void *)
         {
             report("no token", 0);
             waitMs = kRetryMs;
+            continue;
+        }
+        // Not before Wi-Fi has an address: the TCP/IP stack does not exist until the network task has started it, and a
+        // DNS lookup before that asserts inside lwIP ("Invalid mbox"). Look again shortly instead of backing off.
+        if (!Net_state().wifiIp)
+        {
+            waitMs = 2000;
             continue;
         }
 
