@@ -1,0 +1,25 @@
+#pragma once
+#include "lvgl.h"
+
+// The row of coloured status icons shared by the status bar and the resting screen: Wi-Fi, broker, air conditioner,
+// light, door and battery. One definition so the two places can never disagree.
+//
+//   Wi-Fi    green with an address, amber while connecting, red when it is not there
+//   broker   green on MQTT, blue on ESP-NOW, amber while reaching it, red with Wi-Fi but no broker, grey when off
+//   AC       blue when running, grey when off, faint when unbound or stale
+//   light    yellow when the light or the colour light is on
+//   door     red open, green closed, faint without a reading
+//   battery  level symbol and percentage (green / amber / red), a bolt while charging; hidden without a battery
+
+struct StatusIcons
+{
+    lv_obj_t *row = nullptr;
+    lv_obj_t *wifi = nullptr, *mqtt = nullptr, *ac = nullptr, *light = nullptr, *door = nullptr;
+    lv_obj_t *battery = nullptr, *batteryText = nullptr, *bolt = nullptr;
+};
+
+/// Build the row inside `parent`. `height` is the row's height; the icons are centred in it.
+void StatusIcons_create(StatusIcons &icons, lv_obj_t *parent, int32_t height);
+
+/// Recolour everything from the live state. LVGL task only.
+void StatusIcons_refresh(const StatusIcons &icons);

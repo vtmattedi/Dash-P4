@@ -25,7 +25,7 @@ else()
     if(NOT dash_app STREQUAL "dashboard_usb")
         list(FILTER app_sources EXCLUDE REGEX "/PcLink/|/App/PcScreen\\.cpp$")
     endif()
-    set(app_priv_requires espressif__esp_hosted app_update esp_http_client esp_https_ota esp-tls)
+    set(app_priv_requires espressif__esp_hosted app_update esp_http_client esp_https_ota esp-tls esp_adc)
     if("$ENV{DASH_CAMERA}" STREQUAL "1")
         # The dashboard with the camera (custom_dash_camera): the camera service and its page.
         list(APPEND app_requires camera usb_camera)

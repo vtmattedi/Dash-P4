@@ -11,6 +11,6 @@ ARDUINOJSON="$(ls -d .pio/libdeps/*/ArduinoJson/src | head -n 1)"
 MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD:/work" -w /work alpine:3.20 sh -c "
   apk add --no-cache g++ >/dev/null &&
   g++ -std=c++17 -Wall -Wextra -Wno-unused-parameter -DARDUINOJSON_ENABLE_STD_STRING=1 \
-      -Isrc -I$ARDUINOJSON test/host/test_model.cpp src/App/Mqttp.cpp src/App/Notifications.cpp src/App/Registry.cpp \
+      -Isrc -I$ARDUINOJSON test/host/test_model.cpp src/App/Battery.cpp src/App/Calendar.cpp src/App/Feed.cpp src/App/Mqttp.cpp src/App/Notifications.cpp src/App/Registry.cpp \
       src/Explorer/Manifest.cpp src/Explorer/DeviceView.cpp src/Explorer/Facts.cpp src/Explorer/Watch.cpp src/Explorer/TopicTap.cpp src/Explorer/Ping.cpp -o /tmp/test_model &&
   /tmp/test_model"

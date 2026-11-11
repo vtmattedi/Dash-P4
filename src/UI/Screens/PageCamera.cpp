@@ -143,7 +143,8 @@ Row slider(lv_obj_t *parent, const char *title, int min, int max)
 {
     Row row;
     lv_obj_t *box = Theme_column(parent, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_gap(box, 2, 0);
+    lv_obj_set_style_pad_gap(box, 8, 0);
+    lv_obj_set_style_pad_bottom(box, 8, 0);
     lv_obj_t *head = Theme_row(box, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     Theme_label(head, title, UI_FONT_S, UI_COL_TEXT_DIM);
@@ -151,7 +152,13 @@ Row slider(lv_obj_t *parent, const char *title, int min, int max)
 
     row.slider = lv_slider_create(box);
     lv_obj_set_width(row.slider, lv_pct(92));
-    lv_obj_set_style_pad_all(row.slider, 4, LV_PART_KNOB);
+    // The bar and its fill share one height and fully round ends, so the fill is never cut. The knob grows past the bar
+    // for a finger; the row has room above and below for it (padding on the row, not on the slider's own parts).
+    lv_obj_set_height(row.slider, 14);
+    lv_obj_set_style_pad_all(row.slider, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(row.slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_radius(row.slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_pad_all(row.slider, 6, LV_PART_KNOB);
     lv_obj_set_style_bg_color(row.slider, UI_COL_ACCENT, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(row.slider, UI_COL_ACCENT, LV_PART_KNOB);
     lv_slider_set_range(row.slider, min, max);
@@ -198,17 +205,24 @@ lv_obj_t *PageCamera_create(lv_obj_t *parent)
 
     // --- Right: the picture controls ---
     lv_obj_t *controls = Theme_card(page, kControlsW, lv_pct(100));
-    lv_obj_set_style_pad_gap(controls, 6, 0);
+    lv_obj_set_style_pad_gap(controls, 18, 0);
     lv_obj_set_flex_flow(controls, LV_FLEX_FLOW_COLUMN);
-    Theme_cardHeader(controls, "Picture");
+    // Scrolls if the rows ever outgrow the card; the restore button is in the header so it never scrolls away.
+    lv_obj_add_flag(controls, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(controls, LV_DIR_VER);
+    lv_obj_t *controlsHead = Theme_cardHeader(controls, "Picture");
+    lv_obj_t *reset = Theme_button(controlsHead, "Restore defaults", 190, 38);
+    lv_obj_add_event_cb(reset, onReset, LV_EVENT_CLICKED, nullptr);
 
     g_ev = slider(controls, "Exposure", -30, 30);
     g_br = slider(controls, "Brightness", -50, 50);
     g_sat = slider(controls, "Saturation", 0, 200);
     g_con = slider(controls, "Contrast", 50, 150);
 
-    Theme_label(controls, "White balance", UI_FONT_S, UI_COL_TEXT_DIM);
-    lv_obj_t *wb = Theme_row(controls, lv_pct(100), 44);
+    lv_obj_t *wbBox = Theme_column(controls, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_gap(wbBox, 8, 0);
+    Theme_label(wbBox, "White balance", UI_FONT_S, UI_COL_TEXT_DIM);
+    lv_obj_t *wb = Theme_row(wbBox, lv_pct(100), 44);
     lv_obj_set_style_pad_gap(wb, 8, 0);
     const int32_t half = (kControlsW - 2 * 16 - 8) / 2;
     g_wbAuto = Theme_button(wb, "Auto", half, 44);
@@ -216,9 +230,6 @@ lv_obj_t *PageCamera_create(lv_obj_t *parent)
     lv_obj_add_event_cb(g_wbAuto, onWb, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(g_wbHold, onWb, LV_EVENT_CLICKED, reinterpret_cast<void *>(1));
     g_warm = slider(controls, "Warmth (hold)", -50, 50);
-
-    lv_obj_t *reset = Theme_button(controls, "Reset", lv_pct(100), 44);
-    lv_obj_add_event_cb(reset, onReset, LV_EVENT_CLICKED, nullptr);
 
     g_adj = CameraMode_adjust();
     pullSliders();

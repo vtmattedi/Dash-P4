@@ -4,13 +4,16 @@
 
 #include "App/AcClient.h"
 #include "App/Bindings.h"
+#include "App/Calendar.h"
 #include "App/LightControl.h"
 #include "App/Notifications.h"
 #include "App/Registry.h"
 #include "Pages.h"
 #include "UI/Bind.h"
+#include "UI/Calendar/CalFormat.h"
 #include "UI/Modal.h"
 #include "UI/Theme.h"
+#include "UI/Ui.h"
 
 // Home: the three things the panel exists to drive -- the air conditioner, a light and a
 // colour light -- plus the date and a weather slot.
@@ -39,7 +42,7 @@ lv_obj_t *g_lightCard, *g_lightChip, *g_lightSwitch, *g_lightSub;
 // RGB
 lv_obj_t *g_rgbCard, *g_rgbChip, *g_rgbSwitch, *g_rgbSlider, *g_rgbHex, *g_rgbNote;
 // Date / weather
-lv_obj_t *g_dateLabel, *g_weatherLabel;
+lv_obj_t *g_dateLabel, *g_nextLabel, *g_nextSub, *g_weatherLabel;
 
 uint32_t g_bindingsShown = UINT32_MAX;
 
@@ -662,10 +665,53 @@ void refreshRgb()
 
 void buildInfo(lv_obj_t *parent)
 {
+    // The date and the next thing on the calendar. Tapping it opens the calendar.
     lv_obj_t *card = Theme_card(parent, kColW, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_gap(card, 4, 0);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(card, [](lv_event_t *) { Ui_show(UI_PAGE_CALENDAR); }, LV_EVENT_CLICKED, nullptr);
     g_dateLabel = Theme_label(card, "", UI_FONT_L, UI_COL_TEXT);
+    g_nextLabel = Theme_label(card, "", UI_FONT_M, UI_COL_ACCENT);
+    lv_obj_set_width(g_nextLabel, lv_pct(100));
+    lv_label_set_long_mode(g_nextLabel, LV_LABEL_LONG_DOT);
+    lv_obj_set_height(g_nextLabel, lv_font_get_line_height(UI_FONT_M));
+    g_nextSub = Theme_label(card, "", UI_FONT_S, UI_COL_TEXT_DIM);
     g_weatherLabel = Theme_label(card, "Weather: waiting for a forecast", UI_FONT_M, UI_COL_TEXT_DIM);
+}
+
+void refreshNext(int64_t now)
+{
+    char line[96] = "", sub[64] = "";
+    if (const CalEntry *current = Cal_happening(now))
+    {
+        char until[8];
+        CalFmt_clock(current->end, until, sizeof(until));
+        snprintf(line, sizeof(line), "Now: %s", current->title.c_str());
+        snprintf(sub, sizeof(sub), "until %s", until);
+    }
+    else if (const CalEntry *next = Cal_next(now))
+    {
+        char at[8], rel[24];
+        CalFmt_clock(next->start, at, sizeof(at));
+        CalFmt_relative(next->start - now, rel, sizeof(rel));
+        snprintf(line, sizeof(line), "Next: %s  %s", at, next->title.c_str());
+        if (Cal_dayStart(next->start) == Cal_dayStart(now))
+        {
+            snprintf(sub, sizeof(sub), "%s", rel);
+        }
+        else
+        {
+            char day[24];
+            CalFmt_day(Cal_dayStart(next->start), now, day, sizeof(day));
+            snprintf(sub, sizeof(sub), "%s", day);
+        }
+    }
+    else
+    {
+        snprintf(line, sizeof(line), "No upcoming events");
+    }
+    Theme_setText(g_nextLabel, line);
+    Theme_setText(g_nextSub, sub);
 }
 
 void refreshInfo()
@@ -678,10 +724,13 @@ void refreshInfo()
         char buf[48];
         strftime(buf, sizeof(buf), "%A %d %B", &local);
         Theme_setText(g_dateLabel, buf);
+        refreshNext(static_cast<int64_t>(now));
     }
     else
     {
         Theme_setText(g_dateLabel, "Waiting for the clock");
+        Theme_setText(g_nextLabel, "");
+        Theme_setText(g_nextSub, "");
     }
 }
 } // namespace

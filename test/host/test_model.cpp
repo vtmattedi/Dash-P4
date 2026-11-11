@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 
+#include "../../src/App/Battery.h"
+#include "../../src/App/Calendar.h"
+#include "../../src/App/Feed.h"
 #include "../../src/App/Mqttp.h"
 #include "../../src/App/Notifications.h"
 #include "../../src/App/Registry.h"
@@ -699,6 +702,193 @@ static void testDeviceView()
     Explorer_forgetManifest("Adler");
 }
 
+// --- Feed -------------------------------------------------------------------------
+
+static std::string g_feedSaved;
+static void feedSave(const std::string &text) { g_feedSaved = text; }
+
+static FeedDelta parseOk(const char *json)
+{
+    FeedDelta d;
+    CHECK(Feed_parse(json, strlen(json), d));
+    return d;
+}
+
+static void testFeed()
+{
+    // The spec's examples.
+    FeedDelta initial = parseOk(R"({"version":1,"epoch":"e1","full":true,"items":[
+        {"numeric_id":1,"id":"linear:MW-42","source":"linear","kind":"task","title":"Review","status":"todo"},
+        {"numeric_id":7,"id":"linear:MW-9","source":"linear","kind":"task","title":"Old","status":"todo"}],
+        "removed_ids":[],"sources":{},"connections":[]})");
+    CHECK(initial.version == 1 && initial.epoch == "e1" && initial.full && initial.items.size() == 2);
+    CHECK(initial.items[0].numericId == 1 && initial.items[0].title == "Review");
+
+    Feed_clear();
+    Feed_begin("", feedSave);
+    CHECK(Feed_apply(initial));
+    CHECK(Feed_version() == 1 && Feed_epoch() == "e1" && Feed_visibleCount() == 2);
+    CHECK(Feed_visibleAt(0).numericId == 1 && Feed_visibleAt(1).numericId == 7);
+
+    // Dismiss is local, persisted with the epoch, and survives an update of the same item.
+    const uint32_t rev = Feed_revision();
+    Feed_dismiss(1);
+    CHECK(Feed_revision() != rev && Feed_visibleCount() == 1 && Feed_visibleAt(0).numericId == 7);
+    CHECK(g_feedSaved == "e1;1");
+    CHECK(Feed_apply(parseOk(R"({"version":2,"epoch":"e1","full":false,
+        "items":[{"numeric_id":1,"id":"linear:MW-42","source":"linear","kind":"task","title":"Review - updated","status":"in_progress"}],
+        "removed_ids":[]})")));
+    CHECK(Feed_total() == 2 && Feed_visibleCount() == 1);
+
+    // Patch: update + remove. Removing a dismissed item drops its dismissal.
+    CHECK(Feed_apply(parseOk(R"({"version":3,"epoch":"e1","full":false,"items":[],"removed_ids":[1,7,99]})")));
+    CHECK(Feed_total() == 0 && Feed_version() == 3 && g_feedSaved == "e1;");
+
+    // Unchanged poll: same version, nothing to do, no revision bump.
+    const uint32_t quiet = Feed_revision();
+    CHECK(Feed_apply(parseOk(R"({"version":3,"epoch":"e1","full":false,"items":[],"removed_ids":[]})")));
+    CHECK(Feed_revision() == quiet);
+
+    // A retried delta is idempotent.
+    FeedDelta again = parseOk(R"({"version":4,"epoch":"e1","full":false,
+        "items":[{"numeric_id":5,"title":"New"}],"removed_ids":[]})");
+    CHECK(Feed_apply(again) && Feed_apply(again) && Feed_total() == 1);
+
+    // A patch for another epoch is refused and leaves the cache alone.
+    CHECK(!Feed_apply(parseOk(R"({"version":9,"epoch":"other","full":false,"items":[],"removed_ids":[5]})")));
+    CHECK(Feed_total() == 1 && Feed_version() == 4);
+
+    // A full sync of a new epoch forgets the old dismissals (ids mean something else now).
+    Feed_dismiss(5);
+    CHECK(Feed_visibleCount() == 0);
+    CHECK(Feed_apply(parseOk(R"({"version":1,"epoch":"e2","full":true,
+        "items":[{"numeric_id":5,"title":"Different item, same number"}],"removed_ids":[]})")));
+    CHECK(Feed_visibleCount() == 1 && Feed_epoch() == "e2" && g_feedSaved == "e2;");
+
+    // Dismissals loaded from the store apply when the same epoch syncs again, and not otherwise.
+    Feed_clear();
+    Feed_begin("e2;5", feedSave);
+    CHECK(Feed_apply(parseOk(R"({"version":1,"epoch":"e2","full":true,"items":[{"numeric_id":5,"title":"x"},{"numeric_id":6,"title":"y"}]})")));
+    CHECK(Feed_visibleCount() == 1 && Feed_visibleAt(0).numericId == 6);
+    Feed_clear();
+    Feed_begin("e1;5", feedSave);
+    CHECK(Feed_apply(parseOk(R"({"version":1,"epoch":"e2","full":true,"items":[{"numeric_id":5,"title":"x"}]})")));
+    CHECK(Feed_visibleCount() == 1);
+
+    // Thread-safe hand-over.
+    Feed_post(parseOk(R"({"version":2,"epoch":"e2","full":false,"items":[{"numeric_id":8,"title":"z"}]})"));
+    CHECK(Feed_total() == 1);
+    CHECK(Feed_tick() && Feed_total() == 2);
+    Feed_post(parseOk(R"({"version":3,"epoch":"zzz","full":false})"));
+    CHECK(!Feed_tick());
+
+    Feed_dismissAll();
+    CHECK(Feed_visibleCount() == 0);
+
+    // Malformed answers are rejected whole.
+    FeedDelta d;
+    CHECK(!Feed_parse("", 0, d));
+    CHECK(!Feed_parse("[]", 2, d));
+    CHECK(!Feed_parse(R"({"items":[]})", 12, d));
+    CHECK(!Feed_parse(R"({"version":1.5})", 15, d));
+    CHECK(!Feed_parse(R"({"version":"1"})", 15, d));
+    CHECK(!Feed_parse(R"({"version":-1})", 14, d));
+    CHECK(!Feed_parse(R"({"version":1,"items":[{"title":"no id"}]})", 41, d));
+    CHECK(!Feed_parse(R"({"version":1,"items":[{"numeric_id":0}]})", 39, d));
+    CHECK(!Feed_parse(R"({"version":1,"items":{}})", 25, d));
+    CHECK(!Feed_parse(R"({"version":1,"removed_ids":["7"]})", 35, d));
+}
+
+// --- Calendar ---------------------------------------------------------------------
+
+static void testCalendar()
+{
+    setenv("TZ", "<-03>3", 1); // the panel lives at UTC-3
+    tzset();
+
+    int64_t t = 0;
+    bool dateOnly = true;
+    CHECK(Cal_parseTime("2026-11-10T14:00:00-03:00", t, dateOnly) && !dateOnly);
+    CHECK(t == 1794330000); // 2026-11-10 17:00:00Z
+    int64_t z = 0;
+    CHECK(Cal_parseTime("2026-11-10T17:00:00Z", z, dateOnly) && z == t);
+    CHECK(Cal_parseTime("2026-11-10T17:00:00.250+00:00", z, dateOnly) && z == t);
+    CHECK(Cal_parseTime("2026-11-10", z, dateOnly) && dateOnly && z == 1794279600); // local midnight = 03:00Z
+    CHECK(!Cal_parseTime("", z, dateOnly));
+    CHECK(!Cal_parseTime("2026-13-01", z, dateOnly));
+    CHECK(!Cal_parseTime("2026-11-10T14:00:00", z, dateOnly)); // no offset: ambiguous
+    CHECK(!Cal_parseTime("tomorrow", z, dateOnly));
+
+    const int64_t day = Cal_dayStart(t); // 2026-11-10 local midnight
+    CHECK(day == 1794279600);
+    CHECK(Cal_dayStart(t, 1) == day + 86400 && Cal_dayStart(t, -1) == day - 86400);
+
+    Feed_clear();
+    Feed_begin("", feedSave);
+    FeedDelta d = parseOk(R"({"version":1,"epoch":"c1","full":true,"items":[
+      {"numeric_id":1,"id":"g:1","source":"google_calendar","kind":"event","title":"Standup",
+       "starts_at":"2026-11-10T14:00:00-03:00","ends_at":"2026-11-10T14:30:00-03:00","connection":{"alias":"Work"}},
+      {"numeric_id":2,"id":"g:2","source":"google_calendar","kind":"event","title":"Holiday",
+       "starts_at":"2026-11-10","ends_at":"2026-11-12"},
+      {"numeric_id":3,"id":"g:3","source":"google_calendar","kind":"event","title":"Late call",
+       "starts_at":"2026-11-10T23:30:00-03:00","ends_at":"2026-11-11T00:30:00-03:00"},
+      {"numeric_id":4,"id":"w:4","source":"woi","kind":"task","title":"Ship it","due_at":"2026-11-11"},
+      {"numeric_id":5,"id":"l:5","source":"linear","kind":"task","title":"Someday","status":"todo"},
+      {"numeric_id":6,"id":"s:6","source":"stackport","kind":"service","title":"Down","status":"down"},
+      {"numeric_id":8,"id":"s:8","source":"stackport","kind":"service","title":"Fine","status":"up"},
+      {"numeric_id":9,"id":"l:9","source":"linear","kind":"task","title":"Doing","status":"in_progress","due_at":"2026-11-20"},
+      {"numeric_id":10,"id":"l:10","source":"linear","kind":"task","title":"Soon","status":"todo","due_at":"2026-11-12"},
+      {"numeric_id":11,"id":"w:11","source":"woi","kind":"task","title":"No date","status":"todo"},
+      {"numeric_id":7,"id":"g:7","source":"google_calendar","kind":"event","title":"Broken","starts_at":"garbage"}]})");
+    CHECK(Feed_apply(d));
+
+    CHECK(Cal_count() == 4); // 1,2,3 and the due task; the broken event and the undated/service items are not entries
+    const auto today = Cal_onDay(day);
+    CHECK(today.size() == 3 && today[0]->title == "Holiday" && today[1]->title == "Standup" && today[2]->title == "Late call");
+    CHECK(today[0]->allDay && today[1]->account == "Work");
+    const auto tomorrow = Cal_onDay(Cal_dayStart(t, 1));
+    CHECK(tomorrow.size() == 3); // the holiday still covers it, the late call runs over midnight, the task is due
+    CHECK(Cal_onDay(Cal_dayStart(t, 2)).empty()); // the holiday's end is exclusive: it does not touch the 12th
+
+    {
+        // Todos (Linear + WOI): in progress first, then by due date, undated last.
+        const auto todos = Cal_todos();
+        CHECK(todos.size() == 5 && todos[0]->title == "Doing" && todos[1]->title == "Ship it" &&
+              todos[2]->title == "Soon");
+    }
+    CHECK(Cal_alerts().size() == 1 && Cal_alerts()[0]->title == "Down"); // "up" services are not alerts
+    CHECK(Cal_services().total == 2 && Cal_services().down == 1);
+
+    {
+        const auto attention = Cal_attention();
+        CHECK(attention.size() == 6 && attention[0]->title == "Down" && attention[1]->title == "Doing");
+    }
+
+    // Standup is 17:00Z..17:30Z.
+    CHECK(Cal_happening(t - 60) == nullptr);
+    CHECK(Cal_happening(t + 60) && Cal_happening(t + 60)->title == "Standup");
+    CHECK(Cal_happening(t + 1800) == nullptr);
+    CHECK(Cal_next(t - 3600) && Cal_next(t - 3600)->title == "Standup");
+    CHECK(Cal_next(t + 60) && Cal_next(t + 60)->title == "Late call");
+    CHECK(Cal_next(t + 86400) == nullptr);
+
+    // A dismissed task drops off the calendar; an event cannot be dismissed away from it.
+    Feed_dismiss(4);
+    CHECK(Cal_onDay(Cal_dayStart(t, 1)).size() == 2);
+    CHECK(Cal_todos().size() == 4); // the dismissed WOI deadline is gone from the todos too
+    Feed_dismiss(5);
+    CHECK(Cal_todos().size() == 3);
+}
+
+void testBattery()
+{
+    CHECK(Battery_percentFromPinMv(2450) == 100 && Battery_percentFromPinMv(2200) == 0);
+    CHECK(Battery_percentFromPinMv(2325) == 50);
+    CHECK(Battery_percentFromPinMv(3000) == 100 && Battery_percentFromPinMv(100) == 0); // clamped
+    CHECK(Battery_millivoltsFromPinMv(2450) == 4200 && Battery_millivoltsFromPinMv(2200) == 3700);
+    CHECK(!Battery_state().present); // nothing sampled on the host
+}
+
 int main()
 {
     testNotifications();
@@ -710,6 +900,9 @@ int main()
     testTap();
     testPing();
     testDeviceView();
+    testFeed();
+    testCalendar();
+    testBattery();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

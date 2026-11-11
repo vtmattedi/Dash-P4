@@ -7,6 +7,7 @@
 enum UiPage
 {
     UI_PAGE_HOME = 0,
+    UI_PAGE_CALENDAR, // the feed's events by day, tasks and alerts
     UI_PAGE_NETWORK,
     UI_PAGE_MONITOR,
 #if DASH_PC_SCREEN

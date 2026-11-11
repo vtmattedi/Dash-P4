@@ -26,6 +26,7 @@ struct PageDef
 
 const PageDef kPages[UI_PAGE_COUNT] = {
     {"Home", LV_SYMBOL_HOME, "Home", PageHome_create, PageHome_refresh},
+    {"Calendar", LV_SYMBOL_LIST, "Calendar", PageCalendar_create, PageCalendar_refresh},
     {"Network", LV_SYMBOL_WIFI, "Network", PageNetwork_create, PageNetwork_refresh},
     {"Monitor", LV_SYMBOL_EYE_OPEN, "Monitor", PageMonitor_create, PageMonitor_refresh},
 #if DASH_PC_SCREEN
@@ -217,6 +218,7 @@ void onTick(lv_timer_t *)
 void Ui_begin(lv_display_t *display)
 {
     Theme_init(display);
+    lv_sysmon_hide_performance(display); // the FPS / CPU readout
     lv_obj_t *screen = lv_display_get_screen_active(display);
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 

@@ -3,9 +3,9 @@
 #include <stdio.h>
 #include <time.h>
 
-#include "App/Net.h"
 #include "App/Notifications.h"
 #include "NotificationCentre.h"
+#include "StatusIcons.h"
 #include "Theme.h"
 #if DASH_PC_SCREEN
 #include "PcLink/PcLink.h"
@@ -14,7 +14,7 @@
 namespace
 {
 lv_obj_t *g_title;
-lv_obj_t *g_chip;
+StatusIcons g_icons;
 lv_obj_t *g_clock;
 lv_obj_t *g_bell;
 lv_obj_t *g_badge;
@@ -49,7 +49,7 @@ lv_obj_t *StatusBar_create(lv_obj_t *parent)
     lv_obj_add_flag(g_pc, LV_OBJ_FLAG_HIDDEN);
 #endif
 
-    g_chip = Theme_chip(bar);
+    StatusIcons_create(g_icons, bar, UI_STATUSBAR_H - 2);
     g_clock = Theme_label(bar, "--:--", UI_FONT_L, UI_COL_TEXT);
 
     // Bell with an unread badge.
@@ -102,24 +102,7 @@ void StatusBar_refresh()
     }
 #endif
 
-    // Which transport carries traffic.
-    const NetState net = Net_state();
-    if (net.active == NightMare::ConnectionType::ESP_NOW)
-    {
-        Theme_chipSet(g_chip, "ESP-NOW", UI_COL_INFO);
-    }
-    else if (net.active == NightMare::ConnectionType::MQTT)
-    {
-        Theme_chipSet(g_chip, "MQTT", UI_COL_OK);
-    }
-    else if (net.wifiIp)
-    {
-        Theme_chipSet(g_chip, "Wi-Fi, no broker", UI_COL_WARN);
-    }
-    else
-    {
-        Theme_chipSet(g_chip, "Offline", UI_COL_DANGER);
-    }
+    StatusIcons_refresh(g_icons);
 
     const uint32_t unread = Notifications_unread();
     if (unread == 0)

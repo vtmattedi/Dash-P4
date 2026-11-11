@@ -15,8 +15,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include <NightMare/Config.h>
-
 #include "Prefs.h"
 #include "UI/Ui.h"
 #include "usb_camera.h"
@@ -24,48 +22,43 @@
 
 static const char *TAG = "cammode";
 
-// The picture adjustments are NightMare Configs: persisted by the library (restored in startNightMareESP()), settable
-// from the network and the console like any other Config, and the single source of truth. Units as camera_adjust_t.
-// Remote writes are range-checked here; the camera picks changes up in managerTask().
+// The picture adjustments are saved in the settings store (PersistentSettings), not as NightMare Configs: a Config
+// writes the settings file on every set(), six of them per slider release, on the UI task. Here a change only marks the
+// settings dirty; managerTask() writes all six in ONE file write after the sliders have been quiet for kSaveAfterUs.
+// Units as camera_adjust_t.
 namespace
 {
-template <int Lo, int Hi> bool inRange(Config<int> &, const int &requested) { return requested >= Lo && requested <= Hi; }
-
-Config<int> g_cfgExposure("camera:exposure", 0);       // tenths of an EV, -30..30
-Config<int> g_cfgBrightness("camera:brightness", 0);   // -50..50
-Config<int> g_cfgSaturation("camera:saturation", 100); // percent, 0..200
-Config<int> g_cfgContrast("camera:contrast", 100);     // percent, 50..150
-Config<bool> g_cfgWbHold("camera:wb_hold", false);     // hold the white balance instead of following the scene
-Config<int> g_cfgWarmth("camera:warmth", 0);           // -50..50, shifts the held white balance
+constexpr int64_t kSaveAfterUs = 1500 * 1000;
 
 int clampTo(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-camera_adjust_t readConfigs()
+int readKey(const char *key, int fallback)
+{
+    const std::string text = PersistentSettings.get(key, "");
+    return text.empty() ? fallback : atoi(text.c_str());
+}
+
+camera_adjust_t readStored()
 {
     camera_adjust_t a = CAMERA_ADJUST_DEFAULT();
-    a.exposure = static_cast<int8_t>(clampTo(g_cfgExposure.value(), -30, 30));
-    a.brightness = static_cast<int8_t>(clampTo(g_cfgBrightness.value(), -50, 50));
-    a.saturation = static_cast<uint8_t>(clampTo(g_cfgSaturation.value(), 0, 200));
-    a.contrast = static_cast<uint8_t>(clampTo(g_cfgContrast.value(), 50, 150));
-    a.wb_hold = g_cfgWbHold.value();
-    a.warmth = static_cast<int8_t>(clampTo(g_cfgWarmth.value(), -50, 50));
+    a.exposure = static_cast<int8_t>(clampTo(readKey("cam_ev", 0), -30, 30));
+    a.brightness = static_cast<int8_t>(clampTo(readKey("cam_br", 0), -50, 50));
+    a.saturation = static_cast<uint8_t>(clampTo(readKey("cam_sat", 100), 0, 200));
+    a.contrast = static_cast<uint8_t>(clampTo(readKey("cam_con", 100), 50, 150));
+    a.wb_hold = readKey("cam_wbh", 0) != 0;
+    a.warmth = static_cast<int8_t>(clampTo(readKey("cam_warm", 0), -50, 50));
     return a;
 }
 
-bool sameAdjust(const camera_adjust_t &a, const camera_adjust_t &b)
+// One file write for all six. Call with the LVGL lock held (the other settings writes happen on that task; the store
+// has no lock of its own).
+void writeStored(const camera_adjust_t &a)
 {
-    return a.exposure == b.exposure && a.brightness == b.brightness && a.saturation == b.saturation &&
-           a.contrast == b.contrast && a.wb_hold == b.wb_hold && a.warmth == b.warmth;
-}
-
-void writeConfigs(const camera_adjust_t &a)
-{
-    g_cfgExposure.set(a.exposure);
-    g_cfgBrightness.set(a.brightness);
-    g_cfgSaturation.set(a.saturation);
-    g_cfgContrast.set(a.contrast);
-    g_cfgWbHold.set(a.wb_hold);
-    g_cfgWarmth.set(a.warmth);
+    const std::string keys[] = {"cam_ev", "cam_br", "cam_sat", "cam_con", "cam_wbh", "cam_warm"};
+    const std::string values[] = {std::to_string(a.exposure), std::to_string(a.brightness),
+                                  std::to_string(a.saturation), std::to_string(a.contrast),
+                                  a.wb_hold ? "1" : "0",        std::to_string(a.warmth)};
+    PersistentSettings.setMany(keys, values, 6);
 }
 } // namespace
 
@@ -85,8 +78,8 @@ lv_image_dsc_t g_dsc[2];
 unsigned g_next = 0;
 
 std::atomic<lv_obj_t *> g_image{nullptr};
-camera_adjust_t g_adjust = CAMERA_ADJUST_DEFAULT(); // what the camera has now (a slider being dragged is ahead of the Configs)
-camera_adjust_t g_seen = CAMERA_ADJUST_DEFAULT();   // the Configs as managerTask() last looked at them
+camera_adjust_t g_adjust = CAMERA_ADJUST_DEFAULT(); // what the camera has now
+std::atomic<int64_t> g_dirtyAt{0};                  // when the adjustments last changed and are not saved yet; 0 = saved
 
 std::atomic<float> g_fps{0.0f};
 int64_t g_fpsStart = 0;
@@ -172,14 +165,13 @@ void managerTask(void *)
     {
         vTaskDelay(pdMS_TO_TICKS(250));
         const int64_t now = esp_timer_get_time();
-        // The Configs changed (restored at startup, or written from the network): take them over. A slider being
-        // dragged moves g_adjust only, so it is not undone here.
-        const camera_adjust_t fromConfigs = readConfigs();
-        if (!sameAdjust(fromConfigs, g_seen))
+        // Save the adjustments once they have been left alone for a moment.
+        const int64_t dirtyAt = g_dirtyAt.load();
+        if (dirtyAt != 0 && esp_timer_get_time() - dirtyAt > kSaveAfterUs && board_lvgl_lock(200))
         {
-            g_seen = fromConfigs;
-            g_adjust = fromConfigs;
-            camera_set_adjust(&g_adjust);
+            writeStored(g_adjust);
+            g_dirtyAt.store(0);
+            board_lvgl_unlock();
         }
 
         const bool wanted = g_image.load() != nullptr || usb_camera_streaming();
@@ -240,15 +232,8 @@ void CameraMode_begin()
 {
     const Prefs &prefs = Prefs_get();
 
-    // The Configs hold their defaults until startNightMareESP() restores the saved values; managerTask() picks those
-    // up as soon as they differ, long before the camera runs.
-    g_cfgExposure.onWrite = inRange<-30, 30>;
-    g_cfgBrightness.onWrite = inRange<-50, 50>;
-    g_cfgSaturation.onWrite = inRange<0, 200>;
-    g_cfgContrast.onWrite = inRange<50, 150>;
-    g_cfgWarmth.onWrite = inRange<-50, 50>;
-    g_adjust = readConfigs();
-    g_seen = g_adjust;
+    // The settings store is open here (introNightMareESP()): start from what the user saved.
+    g_adjust = readStored();
     camera_set_adjust(&g_adjust); // kept, and applied when the camera starts
 
     ppa_client_config_t ppaConfig = {};
@@ -307,8 +292,7 @@ void CameraMode_setAdjust(const camera_adjust_t &adjust, bool persist)
     camera_get_adjust(&g_adjust); // the clamped values
     if (persist)
     {
-        writeConfigs(g_adjust);
-        g_seen = readConfigs(); // ours: not a change from outside
+        g_dirtyAt.store(esp_timer_get_time()); // written by managerTask() when it has been quiet
     }
 }
 

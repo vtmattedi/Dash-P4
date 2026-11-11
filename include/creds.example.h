@@ -28,3 +28,8 @@
 // ESP-NOW network key (16-64 bytes), the same on the gateway and every device.
 // Only used when NM_NETWORK_ESPNOW is 1 (see .local/plan.md P7).
 #define NM_ESPNOW_PSK "change-me-to-a-16-to-64-byte-key"
+
+// notif.mattediworks.com feed (the resting screen shows it). A dashboard token made in the server's /admin.
+// Optional: `FEED TOKEN <token>` on the console stores one on the panel instead, and wins over this.
+#define NOTIF_API_TOKEN ""
+// #define NOTIF_BASE_URL "https://notif.mattediworks.com"

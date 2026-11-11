@@ -8,6 +8,9 @@
 #include "lvgl.h"
 
 #include "AcClient.h"
+#include "Battery.h"
+#include "Feed.h"
+#include "FeedSync.h"
 #include "Bindings.h"
 #include "Heap.h"
 #include "LightControl.h"
@@ -170,6 +173,7 @@ void unsubscribePort(const std::string &filter) { Net_unsubscribe(filter); }
 //   TARGET <AC|LIGHT|RGB|DOOR|REST> <device> [resource]   bind a role ("" unbinds)
 //   PCSCREEN [SHOW|HIDE|CLOSE|AUTO [ON|OFF]]              the Windows USB screen (PC-screen builds only)
 //   CAMERA [SHOW|HOME|SHARE ON|OFF|SET <name> <value>|RESET]   the board's camera (camera builds only)
+//   FEED [SYNC|RESET|CLEAR|TOKEN <token>]   the notif.mattediworks.com feed: status, poll now, resync, un-dismiss, set token
 //   C6OTA <url> | STATUS | RESTART                        update the ESP32-C6 co-processor over ESP-Hosted
 
 static NightMareResults answer(bool ok, const std::string &text)
@@ -344,6 +348,42 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
         return answer(true, "C6 update started; C6OTA STATUS to follow it");
     }
 
+    if (message.command == "FEED")
+    {
+        if (!board_lvgl_lock(500))
+        {
+            return answer(false, "UI busy, try again");
+        }
+        if (message.subcommand == "SYNC")
+        {
+            FeedSync_pollNow();
+        }
+        else if (message.subcommand == "RESET")
+        {
+            FeedSync_resync();
+        }
+        else if (message.subcommand == "CLEAR")
+        {
+            Feed_clear(); // empties the cache; the next poll refills it, dismissed items stay dismissed
+            FeedSync_resync();
+        }
+        else if (message.subcommand == "TOKEN")
+        {
+            // args[0] is the word TOKEN; the token follows. Empty falls back to creds.h.
+            FeedSync_setToken(message.argc >= 2 ? message.args[1] : std::string());
+        }
+        const FeedSyncStatus sync = FeedSync_status();
+        snprintf(line, sizeof(line),
+                 "{\"token\":%s,\"message\":\"%s\",\"http\":%d,\"okAgoMs\":%d,\"polls\":%u,\"resets\":%u,"
+                 "\"version\":%lld,\"items\":%u,\"visible\":%u}",
+                 sync.hasToken ? "true" : "false", sync.message.c_str(), sync.lastHttp,
+                 sync.lastOkAgoMs == UINT32_MAX ? -1 : (int)sync.lastOkAgoMs, (unsigned)sync.polls,
+                 (unsigned)sync.resets, (long long)Feed_version(), (unsigned)Feed_total(),
+                 (unsigned)Feed_visibleCount());
+        board_lvgl_unlock();
+        return answer(true, line);
+    }
+
     if (message.command == "NOTIFY")
     {
         NotifySeverity severity = NotifySeverity::Info;
@@ -380,10 +420,10 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
     {
         return PcScreen_command(message);
     }
-    return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, NOTIFY, TARGET, C6OTA, PCSCREEN, CAMERA]. "
+    return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, NOTIFY, FEED, TARGET, C6OTA, PCSCREEN, CAMERA]. "
                          "Framework built-ins and `>` resource commands still apply.");
 #else
-    return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, NOTIFY, TARGET, C6OTA]. "
+    return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, NOTIFY, FEED, TARGET, C6OTA]. "
                          "Framework built-ins and `>` resource commands still apply.");
 #endif
 }
@@ -400,6 +440,11 @@ static void housekeepingTimer(lv_timer_t *)
     Mqttp_tick();
     Ping_tick();
     Notifications_tick();
+    Battery_sample();
+    if (!Feed_tick())
+    {
+        FeedSync_resync(); // a patch for another stream than the cache: start over from version 0
+    }
 
     // While bringing the display up: say whether LVGL is actually completing frames.
     static uint32_t lastReportMs = 0;
@@ -481,6 +526,10 @@ void App_loadSettings()
     // soon as it knows the address.
     AcClient_begin();
     LightControl_begin();
+    Feed_begin(PersistentSettings.get("feed_dismissed", ""),
+               [](const std::string &text) { PersistentSettings.set("feed_dismissed", text); });
+    FeedSync_begin();
+    Battery_begin();
     g_settingsLoaded = true;
     board_lvgl_unlock();
 }
