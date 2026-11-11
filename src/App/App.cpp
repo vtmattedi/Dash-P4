@@ -14,6 +14,7 @@
 
 #include "AcClient.h"
 #include "Battery.h"
+#include "SysMon.h"
 #include "Feed.h"
 #include "FeedSync.h"
 #include "Bindings.h"
@@ -485,11 +486,21 @@ static void housekeepingTimer(lv_timer_t *)
     Ping_tick();
     Notifications_tick();
     Battery_sample();
+    SysMon_sample();
     if (!Feed_tick())
     {
         FeedSync_resync(); // a patch for another stream than the cache: start over from version 0
     }
     Feed_cacheTick(esp_timer_get_time() / 1000, kFeedCacheDebounceMs);
+    {
+        // What the feed costs: one heap line each time its contents changed (the first one is the whole feed arriving).
+        static uint32_t loggedRevision = 0;
+        if (Feed_revision() != loggedRevision)
+        {
+            loggedRevision = Feed_revision();
+            Heap_log("feed changed");
+        }
+    }
 
     // While bringing the display up: say whether LVGL is actually completing frames.
     static uint32_t lastReportMs = 0;

@@ -9,6 +9,7 @@
 //   AC       blue when running, grey when off, faint when unbound or stale
 //   light    yellow when the light or the colour light is on
 //   door     red open, green closed, faint without a reading
+//   memory   "RAM 78%" and "PSRAM 24%": the share in use (amber from 80 %, red from 90 %); the internal pool is the scarce one
 //   battery  level symbol and percentage (green / amber / red), a bolt while charging; hidden without a battery
 
 struct StatusIcons
@@ -16,6 +17,7 @@ struct StatusIcons
     lv_obj_t *row = nullptr;
     lv_obj_t *wifi = nullptr, *mqtt = nullptr, *ac = nullptr, *light = nullptr, *door = nullptr;
     lv_obj_t *battery = nullptr, *batteryText = nullptr, *bolt = nullptr;
+    lv_obj_t *ram = nullptr, *psram = nullptr; // the memory monitor: free internal RAM and free PSRAM
 };
 
 /// Build the row inside `parent`. `height` is the row's height; the icons are centred in it.

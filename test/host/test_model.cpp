@@ -9,6 +9,7 @@
 
 #include "../../src/App/Battery.h"
 #include "../../src/App/Calendar.h"
+#include "../../src/App/SysMon.h"
 #include "../../src/App/Feed.h"
 #include "../../src/App/Mqttp.h"
 #include "../../src/App/Notifications.h"
@@ -939,6 +940,14 @@ void testFeedCache()
     Feed_setCacheSaver(nullptr);
 }
 
+void testSysMon()
+{
+    CHECK(SysMon_usedPercent(25, 100) == 75 && SysMon_usedPercent(0, 100) == 100 && SysMon_usedPercent(100, 100) == 0);
+    CHECK(SysMon_usedPercent(200, 100) == 0);  // free can never exceed total, but do not underflow if it does
+    CHECK(SysMon_usedPercent(10, 0) == -1);    // no total, no answer
+    CHECK(SysMon_usedPercent(61 * 1024, 330 * 1024) == 82);
+}
+
 void testBattery()
 {
     CHECK(Battery_percentFromPinMv(2450) == 100 && Battery_percentFromPinMv(2200) == 0);
@@ -962,6 +971,7 @@ int main()
     testFeed();
     testCalendar();
     testFeedCache();
+    testSysMon();
     testBattery();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

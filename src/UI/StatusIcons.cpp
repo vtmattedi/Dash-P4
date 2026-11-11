@@ -8,6 +8,7 @@
 #include "App/Bindings.h"
 #include "App/LightControl.h"
 #include "App/Net.h"
+#include "App/SysMon.h"
 #include "Theme.h"
 
 void StatusIcons_create(StatusIcons &icons, lv_obj_t *parent, int32_t height)
@@ -15,6 +16,9 @@ void StatusIcons_create(StatusIcons &icons, lv_obj_t *parent, int32_t height)
     icons.row = Theme_row(parent, LV_SIZE_CONTENT, height);
     lv_obj_set_style_pad_gap(icons.row, 20, 0);
     lv_obj_set_flex_align(icons.row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    // Memory monitor first, small and dim.
+    icons.ram = Theme_label(icons.row, "RAM --", UI_FONT_S, UI_COL_TEXT_DIM);
+    icons.psram = Theme_label(icons.row, "PSRAM --", UI_FONT_S, UI_COL_TEXT_DIM);
     icons.wifi = Theme_label(icons.row, LV_SYMBOL_WIFI, UI_FONT_L, UI_COL_TEXT_FAINT);
     icons.mqtt = Theme_label(icons.row, UI_ICON_EXCHANGE, UI_FONT_L, UI_COL_TEXT_FAINT);
     icons.ac = Theme_label(icons.row, UI_ICON_SNOWFLAKE, UI_FONT_L, UI_COL_TEXT_FAINT);
@@ -41,6 +45,22 @@ void StatusIcons_refresh(const StatusIcons &icons)
     {
         return;
     }
+    // Memory, as the share in use. The internal pool is what runs out first.
+    const SysMonState mem = SysMon_state();
+    char text[24];
+    if (mem.internalUsedPct >= 0)
+    {
+        snprintf(text, sizeof(text), "RAM %d%%", mem.internalUsedPct);
+        Theme_setText(icons.ram, text);
+        paint(icons.ram, mem.internalUsedPct >= 90 ? UI_COL_DANGER : mem.internalUsedPct >= 80 ? UI_COL_WARN : UI_COL_TEXT_DIM);
+    }
+    if (mem.psramUsedPct >= 0)
+    {
+        snprintf(text, sizeof(text), "PSRAM %d%%", mem.psramUsedPct);
+        Theme_setText(icons.psram, text);
+        paint(icons.psram, mem.psramUsedPct >= 90 ? UI_COL_DANGER : mem.psramUsedPct >= 80 ? UI_COL_WARN : UI_COL_TEXT_DIM);
+    }
+
     const NetState net = Net_state();
     const bool trying = net.connection == NightMare::ConnectionState::CONNECTING ||
                         net.connection == NightMare::ConnectionState::DISCOVERING;
@@ -105,9 +125,9 @@ void StatusIcons_refresh(const StatusIcons &icons)
     const lv_color_t colour = battery.percent >= 30 ? UI_COL_OK : battery.percent >= 15 ? UI_COL_WARN : UI_COL_DANGER;
     paint(symbol, colour);
     paint(icons.batteryText, battery.charging ? UI_COL_OK : colour);
-    char text[8];
-    snprintf(text, sizeof(text), "%d%%", battery.percent);
-    Theme_setText(icons.batteryText, text);
+    char pct[8];
+    snprintf(pct, sizeof(pct), "%d%%", battery.percent);
+    Theme_setText(icons.batteryText, pct);
     if (battery.charging)
     {
         lv_obj_remove_flag(icons.bolt, LV_OBJ_FLAG_HIDDEN);

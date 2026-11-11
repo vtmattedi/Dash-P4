@@ -22,6 +22,7 @@
 
 LV_FONT_DECLARE(font_clock_200);
 LV_IMAGE_DECLARE(img_mw_logo);
+LV_IMAGE_DECLARE(img_stackport);
 
 // The resting screen: a black wall display you can also touch. Tap the calendar to open it in the app, tap the Stackport
 // card for the service list; swipe up from the bottom edge to unlock. A first touch only brightens the screen (it dims
@@ -189,7 +190,7 @@ void refreshTopBar()
     std::string problems;
     if (!net.wifiIp)
     {
-        problems = "No Wi-Fi";
+        // Nothing to say: the Wi-Fi icon in the top bar is red, and feed messages mean nothing without a network.
     }
     else if (!feed.hasToken)
     {
@@ -290,7 +291,7 @@ void refreshTodos(int64_t now)
         char due[32];
         CalFmt_due(item, now, due, sizeof(due));
         const bool overdue = strcmp(due, "overdue") == 0;
-        Theme_setText(row.due, due[0] ? due : item.source.c_str());
+        Theme_setText(row.due, due[0] ? due : item.account.empty() ? item.source.c_str() : item.account.c_str());
         lv_obj_set_style_text_color(row.due, overdue ? UI_COL_DANGER : UI_COL_TEXT_DIM, 0);
     }
 }
@@ -554,7 +555,7 @@ void onTick(lv_timer_t *)
 void buildTopBar()
 {
     g_problems = Theme_label(g_root, "", UI_FONT_M, UI_COL_WARN);
-    lv_obj_set_width(g_problems, 500);
+    lv_obj_set_width(g_problems, 300);
     lv_obj_align(g_problems, LV_ALIGN_TOP_LEFT, 24, 12);
 
     lv_obj_t *icons = Theme_row(g_root, LV_SIZE_CONTENT, kBarH);
@@ -592,6 +593,12 @@ void buildStackport(int y)
     g_stackPanel = panel(g_canvas, kLeftX + 24, y, kClockWidth - 48, 64);
     lv_obj_add_flag(g_stackPanel, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(g_stackPanel, onOpenStackport, LV_EVENT_CLICKED, nullptr);
+    // The Stackport mark (opaque RGB565 already blended onto the card colour), then the arc.
+    lv_obj_t *mark = lv_image_create(g_stackPanel);
+    lv_image_set_src(mark, &img_stackport);
+    lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(mark, LV_ALIGN_LEFT_MID, 12, 0);
+
     // An arc that fills with the share of services that are up; the number inside is how many are.
     g_stackArc = lv_arc_create(g_stackPanel);
     lv_obj_set_size(g_stackArc, 52, 52);
@@ -605,15 +612,15 @@ void buildStackport(int y)
     lv_obj_set_style_arc_width(g_stackArc, 6, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(g_stackArc, UI_COL_SURFACE_HI, LV_PART_MAIN);
     lv_obj_set_style_arc_color(g_stackArc, UI_COL_TEXT_FAINT, LV_PART_INDICATOR);
-    lv_obj_align(g_stackArc, LV_ALIGN_LEFT_MID, 10, 0);
+    lv_obj_align(g_stackArc, LV_ALIGN_LEFT_MID, 70, 0);
     g_stackCount = Theme_label(g_stackArc, "-", UI_FONT_M, UI_COL_TEXT);
     lv_obj_center(g_stackCount);
 
     g_stackTitle = lineLabel(g_stackPanel, UI_FONT_L, UI_COL_TEXT_DIM);
-    lv_obj_set_width(g_stackTitle, 200);
-    lv_obj_align(g_stackTitle, LV_ALIGN_LEFT_MID, 74, 0);
+    lv_obj_set_width(g_stackTitle, 190);
+    lv_obj_align(g_stackTitle, LV_ALIGN_LEFT_MID, 134, 0);
     g_stackSub = lineLabel(g_stackPanel, UI_FONT_M, UI_COL_TEXT_DIM);
-    lv_obj_set_width(g_stackSub, kClockWidth - 48 - 74 - 200 - 18);
+    lv_obj_set_width(g_stackSub, kClockWidth - 48 - 134 - 190 - 18);
     lv_obj_set_style_text_align(g_stackSub, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(g_stackSub, LV_ALIGN_RIGHT_MID, -18, 0);
 }
@@ -723,14 +730,13 @@ void Rest_begin()
     const int stackY = dateY + lv_font_get_line_height(UI_FONT_XL) + 16;
     const int todoY = stackY + 64 + 14;
 
-    // The MW monogram, faint, behind everything else (created first so it sits at the bottom).
+    // The MW monogram, behind everything else (created first so it sits at the bottom). It is an opaque RGB565 image
+    // already tinted dim orange: it only ever sits on this black background, and a recoloured alpha mask made LVGL decode
+    // it again on every draw (task watchdog).
     lv_obj_t *logo = lv_image_create(g_root);
     lv_image_set_src(logo, &img_mw_logo);
-    lv_obj_set_style_image_recolor(logo, UI_COL_ACCENT, 0);
-    lv_obj_set_style_image_recolor_opa(logo, LV_OPA_COVER, 0);
-    lv_obj_set_style_image_opa(logo, 56, 0); // about 22 %: visible, still behind everything
     lv_obj_remove_flag(logo, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(logo, LV_ALIGN_CENTER, 0, 20); // the middle of the screen, 480 px tall
+    lv_obj_align(logo, LV_ALIGN_CENTER, 0, 20); // the middle of the screen, 400 px square
 
     g_canvas = g_root;
 

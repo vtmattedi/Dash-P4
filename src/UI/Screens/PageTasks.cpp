@@ -29,7 +29,9 @@
 
 namespace
 {
-constexpr int kMaxCards = 40; // per column
+// Per column. Real feeds are big (a snapshot had 154 WOI tasks); every card is several LVGL objects and LVGL's small
+// allocations count against internal RAM, so only the first cards are built and the rest are summarised.
+constexpr int kMaxCards = 20;
 constexpr int kSourceCount = 3;
 constexpr int kColumns = 3;
 
@@ -125,9 +127,12 @@ void addCard(lv_obj_t *list, const FeedItem &item, int64_t now)
     lv_obj_t *meta = Theme_row(card, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_style_pad_gap(meta, 10, 0);
     lv_obj_set_flex_align(meta, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    // The connection's alias ("Wakecap", "WoI"), not the kind of tool; the colour still says which tool it is.
     const bool linear = item.source == "linear";
-    Theme_label(meta, linear ? "Linear" : item.source == "woi" ? "WOI" : item.source.c_str(), UI_FONT_S,
-                linear ? UI_COL_INFO : UI_COL_ACCENT);
+    lv_obj_t *origin = Theme_label(meta, item.account.empty() ? item.source.c_str() : item.account.c_str(), UI_FONT_S,
+                                   linear ? UI_COL_INFO : UI_COL_ACCENT);
+    lv_label_set_long_mode(origin, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(origin, 150);
     char due[32];
     CalFmt_due(item, now, due, sizeof(due));
     if (due[0])
@@ -189,6 +194,14 @@ void rebuild(int64_t now)
                 break;
             }
             addCard(g_columnList[c], *item, now);
+        }
+        if (tasks.size() > static_cast<size_t>(kMaxCards))
+        {
+            char more[32];
+            snprintf(more, sizeof(more), "+%u more", static_cast<unsigned>(tasks.size() - kMaxCards));
+            lv_obj_t *label = Theme_label(g_columnList[c], more, UI_FONT_M, UI_COL_TEXT_FAINT);
+            lv_obj_set_width(label, lv_pct(100));
+            lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
         }
     }
 
