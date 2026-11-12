@@ -9,3 +9,31 @@ CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 # The default event loop task runs the Wi-Fi handlers; the library's scan-done handler keeps a 32-entry AP record array
 # on that stack (about 4 KB), which overflowed the 4 KB default and reset the board when "search Wi-Fi" finished.
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
+
+# --- Memory --------------------------------------------------------------------------------------------------------------
+# Internal RAM (stacks, DMA, the Wi-Fi/ESP-Hosted transport) is the scarce pool; the 32 MB PSRAM is not. Keep as much as
+# possible out of the internal one. Measured on the ELF of the old camera build: 161 KB of internal RAM was code in IRAM.
+
+# Allocations of 64 bytes or less stay internal; everything bigger goes to PSRAM. (The board's default sends up to 4 KB to
+# internal RAM, which is where LVGL objects, strings and the cached feed ended up.)
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=64
+
+# TLS buffers (MQTT, the feed's HTTPS) in PSRAM.
+CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# ESP-Hosted SDIO receive per packet, not in "streaming mode". Streaming reads whatever the C6 has queued in one transfer and
+# allocates ONE internal DMA buffer that big; when the internal pool is low that asserted ("sdio_rx_get_buffer ... (*buf)")
+# right after Wi-Fi connected. Per-packet receive needs ~1.6 KB. The panel's traffic (MQTT, a small JSON feed) never needs the
+# peak throughput streaming buys. (board/sdkconfig.board still selects streaming; this file is merged after it.)
+# CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE is not set
+CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_NONE=y
+
+# FreeRTOS and ring buffer functions that are not ISR-safe run from flash/PSRAM instead of IRAM (~17 KB freed).
+CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y
+# Sleep support in IRAM: this wall panel never sleeps.
+CONFIG_PM_SLEEP_FUNC_IN_IRAM=n
+CONFIG_PM_SLP_IRAM_OPT=n
+# LVGL's blend/draw hot paths stay in IRAM (CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM, the default): moving them to PSRAM
+# would free ~61 KB but costs rendering speed, which the UI needs. Revisit only if internal RAM is short again.

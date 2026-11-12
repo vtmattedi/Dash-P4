@@ -14,23 +14,11 @@ Import("env")  # noqa: F821  (PlatformIO injects this)
 project = env.subst("$PROJECT_DIR")
 
 # --- firmware choice ----------------------------------------------------------------------
-# platformio.ini `custom_dash_app` (dashboard | usb_screen | dashboard_usb | usb_cam). CMake reads it from the
-# environment: the IDF configure step, and its separate requirement-expansion process, inherit ours.
-APPS = ("dashboard", "usb_screen", "dashboard_usb", "usb_cam")
-dash_app = env.GetProjectOption("custom_dash_app", "dashboard").strip()
-if dash_app not in APPS:
-    raise SystemExit("custom_dash_app must be one of %s, not %r" % (", ".join(APPS), dash_app))
-os.environ["DASH_APP"] = dash_app
 # platformio.ini `custom_dash_espnow = yes`: ESP-NOW through the C6 (adds the espnow_hosted component; the
 # env also sets -DNM_NETWORK_ESPNOW=1 for the library).
 dash_espnow = env.GetProjectOption("custom_dash_espnow", "no").strip().lower() in ("yes", "true", "1")
 os.environ["DASH_ESPNOW"] = "1" if dash_espnow else "0"
-# platformio.ini `custom_dash_camera = yes`: the MIPI-CSI camera and the USB webcam personality (adds camera/, usb_camera/ and the
-# vendor's esp_cam_sensor; its managed dependencies get their own lock file). The camera firmware always has it.
-dash_camera = dash_app == "usb_cam" or env.GetProjectOption("custom_dash_camera", "no").strip().lower() in ("yes", "true", "1")
-os.environ["DASH_CAMERA"] = "1" if dash_camera else "0"
-print("Dash-P4 firmware: %s%s%s" % (dash_app, " + ESP-NOW over the C6" if dash_espnow else "",
-                                      " + camera" if dash_camera else ""))
+print("Dash-P4 firmware: dashboard%s" % (" + ESP-NOW over the C6" if dash_espnow else ""))
 
 version_file = os.path.join(project, "src", "Version", "version")
 header = os.path.join(project, "include", "Version.h")
@@ -64,12 +52,6 @@ if os.path.exists(generated):
         os.path.join(project, "sdkconfig.defaults"),
         os.path.join(project, "board", "sdkconfig.board"),
     ]
-    if dash_app == "usb_screen":
-        sources.append(os.path.join(project, "src", "UsbScreen", "sdkconfig.usb_screen"))
-    if dash_camera:
-        sources.append(os.path.join(project, "src", "UsbCam", "sdkconfig.camera"))
-    if dash_app == "usb_cam":
-        sources.append(os.path.join(project, "src", "UsbCam", "sdkconfig.usb_cam"))
     newest = 0
     for source in sources:
         if os.path.exists(source):
