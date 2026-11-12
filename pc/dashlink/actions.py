@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import time
 import urllib.parse
-import webbrowser
 from collections import deque
 from typing import Callable, Iterable
+
+from .browsers import BROWSERS, open_in_browser
 
 MAX_URL = 2048
 MEDIA_COMMANDS = ("play_pause", "next", "prev", "stop")
@@ -41,7 +42,7 @@ class ActionRunner:
         self,
         media=None,
         allow_hosts: Iterable[str] | None = None,
-        opener: Callable[[str], object] = webbrowser.open,
+        opener: Callable[[str, str], object] = open_in_browser,
         clock: Callable[[], float] = time.monotonic,
         url_limit: tuple[int, float] = (5, 60.0),
     ) -> None:
@@ -71,14 +72,17 @@ class ActionRunner:
 
     def _open_url(self, args: dict) -> tuple[bool, str]:
         url = validate_url(args.get("url"), self.allow_hosts)
+        browser = args.get("browser", "default")
+        if browser not in BROWSERS:
+            raise ValueError("unknown browser")
         now = self.clock()
         while self._url_times and now - self._url_times[0] > self._url_window:
             self._url_times.popleft()
         if len(self._url_times) >= self._url_count:
             return False, "too many links opened; slow down"
         self._url_times.append(now)
-        self.opener(url)
-        return True, ""
+        note = self.opener(url, browser)
+        return True, note if isinstance(note, str) else ""
 
     async def _media(self, args: dict) -> tuple[bool, str]:
         command = args.get("cmd")

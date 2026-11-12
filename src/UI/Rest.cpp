@@ -14,10 +14,10 @@
 #include "Calendar/CalFormat.h"
 #include "Calendar/EventDetail.h"
 #include "Calendar/StackportSheet.h"
+#include "Link/LinkServer.h"
 #include "Modal.h"
 #include "StatusIcons.h"
 #include "Theme.h"
-#include "Toast.h"
 #include "board.h"
 
 LV_FONT_DECLARE(font_clock_200);
@@ -59,7 +59,6 @@ constexpr int kBarH = 44;      // top bar
 constexpr int kRightX = 640;   // calendar column
 constexpr int kRightW = 360;
 constexpr int kTodoRows = 4;
-constexpr int kLaterRows = 4;
 
 // Top bar.
 lv_obj_t *g_problems, *g_iconFeed;
@@ -75,18 +74,27 @@ struct TodoRow
 };
 lv_obj_t *g_todoHeader;
 TodoRow g_todo[kTodoRows];
-// Calendar.
+// Calendar: an accordion. One event is open as a panel, the rest are single rows (see the calendar section below).
+constexpr int kSlots = 5;
+constexpr int kCardH = 224; // an open event
+constexpr int kRowH = 44;   // a folded event
+constexpr int kSlotGap = 8;
 lv_obj_t *g_nowTag, *g_nowText;
-lv_obj_t *g_nextPanel, *g_nextBar, *g_nextTag, *g_nextRel, *g_nextTitle, *g_nextWhen, *g_nextAccount;
-lv_obj_t *g_laterHeader;
-struct LaterRow
+struct Slot
 {
-    lv_obj_t *root, *bar, *time, *title;
+    lv_obj_t *row, *rowBar, *rowTime, *rowTitle;                             // folded
+    lv_obj_t *card, *bar, *tag, *rel, *title, *when, *account, *desc, *hint; // open
+    int64_t id; // the feed item behind it (0: the slot is unused)
 };
-LaterRow g_later[kLaterRows];
+Slot g_slot[kSlots];
+int g_open = 0;       // the slot that is a panel
+int64_t g_openId = 0; // its event: what a refresh keeps open
+int g_layoutKey = -1; // what applyLayout() last set up
+bool g_animating = false;
+int g_animFrom = 0, g_animTo = 0;
+bool g_suppressClick = false; // LVGL also sends a click when a long press is released
 
-int64_t g_nowId = 0, g_nextId = 0; // the feed item behind the NOW line and the NEXT card (0: none)
-int64_t g_laterId[kLaterRows];
+int64_t g_nowId = 0; // the feed item behind the NOW line (0: none)
 int64_t g_todoId[kTodoRows];
 int32_t g_pressY = 0;
 uint32_t g_restStart = 0; // lv_tick when the rest screen came up
@@ -96,6 +104,11 @@ constexpr int kUnlockSwipePx = 90;
 constexpr int kZoneH = 70;
 
 bool g_resting = false;
+// A short message in the top-left corner (what became of "open on the PC"), shown over the usual problems text.
+std::string g_flash;
+uint32_t g_flashAt = 0;
+uint32_t g_openAction = 0, g_openActionAt = 0;
+
 bool g_forced = false; // Rest_now(): rest even with the timeout set to never
 void (*g_afterTouchWake)() = nullptr; // Rest_nowThen(): one shot
 
@@ -204,6 +217,10 @@ void refreshTopBar()
     {
         problems = "Saved data, syncing"; // restored from flash; nothing fetched yet this boot
     }
+    if (!g_flash.empty() && lv_tick_elaps(g_flashAt) < 3500)
+    {
+        problems = g_flash;
+    }
     Theme_setText(g_problems, problems.c_str());
 
     StatusIcons_refresh(g_icons);
@@ -260,9 +277,11 @@ void refreshStackport()
 
 void refreshTodos(int64_t now)
 {
-    const auto todos = Cal_todos();
+    // Only what is being worked on (Linear in progress, WOI in progress). The backlog, and what waits for review, is on the
+    // Tasks page; a wall display shows what matters now.
+    const auto todos = Cal_tasks("", static_cast<int>(TaskGroup::Doing));
     char buf[32];
-    snprintf(buf, sizeof(buf), todos.empty() ? "TODO" : "TODO  \xE2\x80\xA2  %u", static_cast<unsigned>(todos.size()));
+    snprintf(buf, sizeof(buf), todos.empty() ? "DOING" : "DOING  \xE2\x80\xA2  %u", static_cast<unsigned>(todos.size()));
     Theme_setText(g_todoHeader, buf);
 
     for (int i = 0; i < kTodoRows; ++i)
@@ -275,7 +294,7 @@ void refreshTodos(int64_t now)
             if (i == 0 && todos.empty())
             {
                 lv_obj_set_style_bg_opa(row.dot, LV_OPA_TRANSP, 0);
-                Theme_setText(row.title, "Nothing to do");
+                Theme_setText(row.title, "Nothing in progress");
                 lv_obj_set_style_text_color(row.title, UI_COL_TEXT_FAINT, 0);
                 Theme_setText(row.due, "");
             }
@@ -283,9 +302,8 @@ void refreshTodos(int64_t now)
         }
         const FeedItem &item = *todos[i];
         show(row.root, true);
-        const bool started = item.status == "in_progress" || item.status == "started";
         lv_obj_set_style_bg_opa(row.dot, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(row.dot, started ? UI_COL_ACCENT : UI_COL_TEXT_FAINT, 0);
+        lv_obj_set_style_bg_color(row.dot, UI_COL_ACCENT, 0);
         Theme_setText(row.title, item.title.empty() ? item.id.c_str() : item.title.c_str());
         lv_obj_set_style_text_color(row.title, UI_COL_TEXT, 0);
         char due[32];
@@ -296,20 +314,191 @@ void refreshTodos(int64_t now)
     }
 }
 
-// ---------------------------------------------------------------- calendar
+// ---------------------------------------------------------------- calendar: an accordion
+//
+// The next event is open as a panel and the ones after it are single rows. Tap a row: it grows into the panel while the
+// open panel folds into a row, in one animation. Hold any event: its link opens in Chrome on the linked PC.
 
-void setLater(LaterRow &row, bool shown, lv_color_t colour = UI_COL_BORDER, const char *time = "",
-              const char *title = "", lv_color_t titleColour = UI_COL_TEXT)
+void flash(const std::string &text)
 {
-    show(row.root, shown);
-    if (!shown)
+    g_flash = text;
+    g_flashAt = lv_tick_get();
+}
+
+void openOnPc(int64_t id)
+{
+    const FeedItem *item = Feed_find(id);
+    // The meeting itself when the event has one (Meet, Zoom, Teams); otherwise the item's own page.
+    const std::string target = !item || item->joinUrl.empty() ? (item ? item->url : std::string()) : item->joinUrl;
+    if (target.empty())
+    {
+        flash("No link on this event");
+        return;
+    }
+    const uint32_t action = LinkServer_openUrl(target, "chrome");
+    if (action == 0)
+    {
+        flash("No PC linked");
+        return;
+    }
+    g_openAction = action;
+    g_openActionAt = lv_tick_get();
+    flash("Opening on the PC...");
+}
+
+// What the PC answered.
+void pollOpenResult()
+{
+    if (g_openAction == 0)
     {
         return;
     }
-    lv_obj_set_style_bg_color(row.bar, colour, 0);
-    Theme_setText(row.time, time);
-    Theme_setText(row.title, title);
-    lv_obj_set_style_text_color(row.title, titleColour, 0);
+    const LinkResult result = LinkServer_result(g_openAction);
+    if (result.done)
+    {
+        flash(result.ok ? (result.message.empty() ? std::string("Opened on the PC") : result.message)
+                        : "PC: " + result.message);
+        g_openAction = 0;
+    }
+    else if (lv_tick_elaps(g_openActionAt) > 6000)
+    {
+        flash("The PC did not answer");
+        g_openAction = 0;
+    }
+}
+
+// The resting shape: the open event a panel, the others rows, unused slots nothing.
+void applyLayout()
+{
+    int key = g_open;
+    for (int i = 0; i < kSlots; ++i)
+    {
+        Slot &slot = g_slot[i];
+        const bool used = slot.id != 0;
+        const bool open = used && i == g_open;
+        show(slot.card, open);
+        show(slot.row, used && !open);
+        lv_obj_set_height(slot.card, kCardH);
+        lv_obj_set_height(slot.row, kRowH);
+        key |= (used ? 1 : 0) << (8 + i);
+    }
+    g_layoutKey = key;
+}
+
+void animSlots(void *, int32_t v) // v: 0..1000
+{
+    Slot &from = g_slot[g_animFrom];
+    Slot &to = g_slot[g_animTo];
+    lv_obj_set_height(from.card, kCardH * (1000 - v) / 1000);
+    lv_obj_set_height(from.row, kRowH * v / 1000);
+    lv_obj_set_height(to.card, kCardH * v / 1000);
+    lv_obj_set_height(to.row, kRowH * (1000 - v) / 1000);
+}
+
+void animSlotsDone(lv_anim_t *)
+{
+    g_animating = false;
+    g_open = g_animTo;
+    g_openId = g_slot[g_open].id;
+    applyLayout();
+}
+
+void openSlot(int to)
+{
+    if (g_animating || to == g_open || to < 0 || to >= kSlots || g_slot[to].id == 0)
+    {
+        return;
+    }
+    g_animFrom = g_open;
+    g_animTo = to;
+    g_animating = true;
+    show(g_slot[g_animFrom].card, true);
+    show(g_slot[g_animFrom].row, true);
+    show(g_slot[to].card, true);
+    show(g_slot[to].row, true);
+    animSlots(nullptr, 0); // the first frame, before LVGL gets to it
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, &g_animFrom);
+    lv_anim_set_exec_cb(&a, animSlots);
+    lv_anim_set_values(&a, 0, 1000);
+    lv_anim_set_duration(&a, 280);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_set_completed_cb(&a, animSlotsDone);
+    lv_anim_start(&a);
+}
+
+int slotOf(lv_event_t *e) { return static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e))); }
+
+void onSlotPress(lv_event_t *) { g_suppressClick = false; }
+
+void onRowClick(lv_event_t *e)
+{
+    if (g_suppressClick)
+    {
+        g_suppressClick = false;
+        return;
+    }
+    openSlot(slotOf(e));
+}
+
+void onCardClick(lv_event_t *e)
+{
+    if (g_suppressClick)
+    {
+        g_suppressClick = false;
+        return;
+    }
+    EventDetail_open(g_slot[slotOf(e)].id);
+}
+
+void onSlotHold(lv_event_t *e)
+{
+    g_suppressClick = true;
+    openOnPc(g_slot[slotOf(e)].id);
+}
+
+void fillSlot(Slot &slot, const CalEntry &entry, int64_t now, bool isNext)
+{
+    slot.id = entry.numericId;
+    const lv_color_t colour = CalFmt_accountColour(entry.account);
+    const int64_t day = Cal_dayStart(entry.start);
+    const bool today = day == Cal_dayStart(now);
+
+    char when[40], span[40], rel[32], dayName[24] = "";
+    if (today)
+    {
+        CalFmt_clock(entry.start, when, sizeof(when));
+    }
+    else
+    {
+        const time_t t = static_cast<time_t>(entry.start);
+        struct tm local;
+        localtime_r(&t, &local);
+        strftime(when, sizeof(when), "%a %H:%M", &local);
+        CalFmt_day(day, now, dayName, sizeof(dayName));
+    }
+    CalFmt_span(entry, span, sizeof(span));
+    CalFmt_relative(entry.start - now, rel, sizeof(rel));
+
+    // folded
+    lv_obj_set_style_bg_color(slot.rowBar, colour, 0);
+    Theme_setText(slot.rowTime, when);
+    Theme_setText(slot.rowTitle, entry.title.c_str());
+
+    // open
+    lv_obj_set_style_bg_color(slot.bar, colour, 0);
+    Theme_setText(slot.tag, isNext ? "NEXT" : today ? "LATER TODAY" : dayName);
+    Theme_setText(slot.rel, rel);
+    Theme_setText(slot.title, entry.title.c_str());
+    char line[88];
+    snprintf(line, sizeof(line), "%s%s%s", today ? "" : dayName, today ? "" : "  ", span);
+    Theme_setText(slot.when, line);
+    Theme_setText(slot.account, entry.account.c_str());
+    Theme_setText(slot.desc, entry.description.c_str());
+    Theme_setText(slot.hint, !entry.joinUrl.empty() ? "Hold to join on the PC"
+                             : entry.url.empty()    ? ""
+                                                    : "Hold to open on the PC");
 }
 
 void refreshCalendar(int64_t now)
@@ -332,7 +521,6 @@ void refreshCalendar(int64_t now)
         }
     }
     g_nowId = current ? current->numericId : allDay ? allDay->numericId : 0;
-    g_nextId = next ? next->numericId : 0;
     char buf[96];
     if (current)
     {
@@ -356,84 +544,60 @@ void refreshCalendar(int64_t now)
         lv_obj_set_style_text_color(g_nowText, UI_COL_TEXT_FAINT, 0);
     }
 
-    // NEXT: the big card.
+    // The accordion: the next event, then what follows it within two days.
+    std::vector<const CalEntry *> list;
     if (next)
     {
-        lv_obj_set_style_bg_color(g_nextBar, CalFmt_accountColour(next->account), 0);
-        lv_obj_set_style_bg_opa(g_nextBar, LV_OPA_COVER, 0);
-        char rel[32];
-        CalFmt_relative(next->start - now, rel, sizeof(rel));
-        Theme_setText(g_nextRel, rel);
-        Theme_setText(g_nextTitle, next->title.c_str());
-        lv_obj_set_style_text_color(g_nextTitle, UI_COL_TEXT, 0);
-        char day[24] = "", span[40];
-        const int64_t startDay = Cal_dayStart(next->start);
-        if (startDay != Cal_dayStart(now))
-        {
-            CalFmt_day(startDay, now, day, sizeof(day));
-        }
-        CalFmt_span(*next, span, sizeof(span));
-        snprintf(buf, sizeof(buf), "%s%s%s", day, day[0] ? "  " : "", span);
-        Theme_setText(g_nextWhen, buf);
-        Theme_setText(g_nextAccount, next->account.c_str());
-    }
-    else
-    {
-        lv_obj_set_style_bg_opa(g_nextBar, LV_OPA_TRANSP, 0);
-        Theme_setText(g_nextRel, "");
-        Theme_setText(g_nextTitle, clockOk ? "Nothing coming up" : "");
-        lv_obj_set_style_text_color(g_nextTitle, UI_COL_TEXT_FAINT, 0);
-        Theme_setText(g_nextWhen, "");
-        Theme_setText(g_nextAccount, "");
-    }
-
-    // LATER: what follows the next event, within two days.
-    std::vector<const CalEntry *> later;
-    if (next)
-    {
+        list.push_back(next);
         const int64_t today = Cal_dayStart(now);
-        for (int d = 0; d < 3; ++d)
+        for (int d = 0; d < 3 && list.size() < static_cast<size_t>(kSlots); ++d)
         {
             for (const CalEntry *e : Cal_onDay(Cal_dayStart(today, d)))
             {
-                if (e->kind == CalKind::Event && !e->allDay && e != next && e->start >= next->start &&
-                    e->start > now && e->start >= Cal_dayStart(today, d))
+                if (list.size() < static_cast<size_t>(kSlots) && e->kind == CalKind::Event && !e->allDay && e != next &&
+                    e->start >= next->start && e->start > now && e->start >= Cal_dayStart(today, d))
                 {
-                    later.push_back(e);
+                    list.push_back(e);
                 }
             }
         }
     }
-    show(g_laterHeader, !later.empty());
-    if (!later.empty())
+
+    // What stays open: the event that was open, if it is still on the list.
+    int open = 0;
+    bool found = false;
+    for (size_t i = 0; i < list.size(); ++i)
     {
-        snprintf(buf, sizeof(buf), later.size() > static_cast<size_t>(kLaterRows) ? "THEN  \xE2\x80\xA2  %u" : "THEN",
-                 static_cast<unsigned>(later.size()));
-        Theme_setText(g_laterHeader, buf);
-    }
-    for (int i = 0; i < kLaterRows; ++i)
-    {
-        g_laterId[i] = i < static_cast<int>(later.size()) ? later[i]->numericId : 0;
-        if (i >= static_cast<int>(later.size()))
+        if (list[i]->numericId == g_openId)
         {
-            setLater(g_later[i], false);
-            continue;
+            open = static_cast<int>(i);
+            found = true;
         }
-        const CalEntry &e = *later[i];
-        char time[24];
-        const int64_t day = Cal_dayStart(e.start);
-        if (day == Cal_dayStart(now))
+    }
+    for (int i = 0; i < kSlots; ++i)
+    {
+        if (i < static_cast<int>(list.size()))
         {
-            CalFmt_clock(e.start, time, sizeof(time));
+            fillSlot(g_slot[i], *list[i], now, list[i] == next);
         }
         else
         {
-            const time_t t = static_cast<time_t>(e.start);
-            struct tm local;
-            localtime_r(&t, &local);
-            strftime(time, sizeof(time), "%a %H:%M", &local);
+            g_slot[i].id = 0;
         }
-        setLater(g_later[i], true, CalFmt_accountColour(e.account), time, e.title.c_str());
+    }
+    if (!g_animating)
+    {
+        g_open = found ? open : 0;
+        g_openId = list.empty() ? 0 : list[g_open]->numericId;
+        int key = g_open;
+        for (int i = 0; i < kSlots; ++i)
+        {
+            key |= (g_slot[i].id != 0 ? 1 : 0) << (8 + i);
+        }
+        if (key != g_layoutKey)
+        {
+            applyLayout();
+        }
     }
 }
 
@@ -470,6 +634,11 @@ void onZoneRelease(lv_event_t *)
 // appear above it: the rest screen stays up underneath.
 void onOpenItem(lv_event_t *e)
 {
+    if (g_suppressClick)
+    {
+        g_suppressClick = false;
+        return;
+    }
     const int64_t id = *static_cast<const int64_t *>(lv_event_get_user_data(e));
     if (id != 0)
     {
@@ -479,11 +648,24 @@ void onOpenItem(lv_event_t *e)
 
 void onOpenStackport(lv_event_t *) { StackportSheet_open(); }
 
+// Hold: open the item's link in Chrome on the linked PC (an event's calendar page, a Linear issue ...).
+void onHoldItem(lv_event_t *e)
+{
+    const int64_t id = *static_cast<const int64_t *>(lv_event_get_user_data(e));
+    if (id != 0)
+    {
+        g_suppressClick = true;
+        openOnPc(id);
+    }
+}
+
 void makeTappable(lv_obj_t *obj, const int64_t *idSlot)
 {
     lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(obj, 6);
+    lv_obj_add_event_cb(obj, onSlotPress, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(obj, onOpenItem, LV_EVENT_CLICKED, const_cast<int64_t *>(idSlot));
+    lv_obj_add_event_cb(obj, onHoldItem, LV_EVENT_LONG_PRESSED, const_cast<int64_t *>(idSlot));
 }
 
 void refresh()
@@ -504,6 +686,7 @@ void refresh()
         Theme_setText(g_date, "");
     }
 
+    pollOpenResult();
     refreshTopBar();
     refreshStackport();
     refreshTodos(static_cast<int64_t>(now));
@@ -520,11 +703,14 @@ void goToRest()
     g_restStart = lv_tick_get();
     g_bright = false;
     Modal_closeAll();
-    Toast_setSuppressed(true);
     refresh();
     startColonFade();
     lv_obj_remove_flag(g_root, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(g_root);
+    // The app (status bar, rail, page) sits under this screen and LVGL draws the active screen before the top layer, so
+    // every animation here -- the colon, a modal's scrim -- also re-rendered the whole app for nothing. Not drawn at all
+    // while resting; this screen is opaque and covers all of it.
+    lv_obj_add_flag(lv_screen_active(), LV_OBJ_FLAG_HIDDEN);
     board_set_backlight(static_cast<uint8_t>(Prefs_get().blRest));
 }
 
@@ -628,7 +814,7 @@ void buildStackport(int y)
 void buildTodos(int y)
 {
     const int x = kLeftX + 24, w = kClockWidth - 48;
-    g_todoHeader = Theme_label(g_canvas, "TODO", UI_FONT_S, UI_COL_TEXT_FAINT);
+    g_todoHeader = Theme_label(g_canvas, "DOING", UI_FONT_S, UI_COL_TEXT_FAINT);
     lv_obj_set_pos(g_todoHeader, x + 2, y);
     for (int i = 0; i < kTodoRows; ++i)
     {
@@ -663,52 +849,81 @@ void buildCalendar()
     lv_obj_set_pos(g_nowText, kRightX + 64, y + 2);
     y += 36;
 
-    // The big NEXT card.
-    constexpr int kNextH = 224;
-    g_nextPanel = panel(g_canvas, kRightX, y, kRightW, kNextH);
-    makeTappable(g_nextPanel, &g_nextId);
-    g_nextBar = bar(g_nextPanel, 6, kNextH - 36);
-    lv_obj_align(g_nextBar, LV_ALIGN_LEFT_MID, 12, 0);
-    g_nextTag = Theme_label(g_nextPanel, "NEXT", UI_FONT_S, UI_COL_TEXT_FAINT);
-    lv_obj_set_pos(g_nextTag, 34, 18);
-    g_nextRel = lineLabel(g_nextPanel, UI_FONT_L, UI_COL_ACCENT);
-    lv_obj_set_width(g_nextRel, 200);
-    lv_obj_set_style_text_align(g_nextRel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(g_nextRel, LV_ALIGN_TOP_RIGHT, -18, 14);
-    g_nextTitle = Theme_label(g_nextPanel, "", UI_FONT_XL, UI_COL_TEXT);
-    lv_obj_set_width(g_nextTitle, kRightW - 56);
-    lv_label_set_long_mode(g_nextTitle, LV_LABEL_LONG_DOT);
-    lv_obj_set_height(g_nextTitle, lv_font_get_line_height(UI_FONT_XL) * 3 + 4);
-    lv_obj_set_pos(g_nextTitle, 34, 46);
-    g_nextWhen = lineLabel(g_nextPanel, UI_FONT_L, UI_COL_TEXT);
-    lv_obj_set_width(g_nextWhen, kRightW - 56);
-    lv_obj_align(g_nextWhen, LV_ALIGN_BOTTOM_LEFT, 34, -46);
-    g_nextAccount = lineLabel(g_nextPanel, UI_FONT_S, UI_COL_TEXT_DIM);
-    lv_obj_set_width(g_nextAccount, kRightW - 56);
-    lv_obj_align(g_nextAccount, LV_ALIGN_BOTTOM_LEFT, 34, -20);
-    y += kNextH + 14;
+    // The accordion: one column; each slot has an open panel and a folded row, one of them shown.
+    lv_obj_t *column = lv_obj_create(g_canvas);
+    Theme_plain(column);
+    lv_obj_set_pos(column, kRightX, y);
+    lv_obj_set_size(column, kRightW, kCardH + (kSlots - 1) * (kRowH + kSlotGap) + kSlotGap);
+    lv_obj_set_flex_flow(column, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(column, 0, 0);
+    lv_obj_set_style_pad_gap(column, 0, 0);
+    lv_obj_remove_flag(column, LV_OBJ_FLAG_SCROLLABLE);
 
-    // What follows.
-    g_laterHeader = Theme_label(g_canvas, "THEN", UI_FONT_S, UI_COL_TEXT_FAINT);
-    lv_obj_set_pos(g_laterHeader, kRightX + 2, y);
-    y += 22;
-    for (int i = 0; i < kLaterRows; ++i)
+    for (int i = 0; i < kSlots; ++i)
     {
-        LaterRow &row = g_later[i];
-        row.root = lv_obj_create(g_canvas);
-        Theme_plain(row.root);
-        makeTappable(row.root, &g_laterId[i]);
-        lv_obj_set_size(row.root, kRightW, 44);
-        lv_obj_set_pos(row.root, kRightX, y + i * 46);
-        lv_obj_set_flex_flow(row.root, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row.root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_gap(row.root, 12, 0);
-        row.bar = bar(row.root, 5, 30);
-        row.time = Theme_label(row.root, "", UI_FONT_M, UI_COL_TEXT_DIM);
-        lv_obj_set_width(row.time, 84);
-        row.title = lineLabel(row.root, UI_FONT_L, UI_COL_TEXT);
-        lv_obj_set_flex_grow(row.title, 1);
-        show(row.root, false);
+        Slot &slot = g_slot[i];
+        slot.id = 0;
+        void *index = reinterpret_cast<void *>(static_cast<intptr_t>(i));
+
+        // The open panel.
+        slot.card = panel(column, 0, 0, kRightW, kCardH);
+        lv_obj_set_style_margin_bottom(slot.card, kSlotGap, 0);
+        lv_obj_set_style_bg_color(slot.card, UI_COL_SURFACE_HI, LV_STATE_PRESSED);
+        lv_obj_add_flag(slot.card, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(slot.card, onSlotPress, LV_EVENT_PRESSED, index);
+        lv_obj_add_event_cb(slot.card, onCardClick, LV_EVENT_CLICKED, index);
+        lv_obj_add_event_cb(slot.card, onSlotHold, LV_EVENT_LONG_PRESSED, index);
+        slot.bar = bar(slot.card, 6, kCardH - 36);
+        lv_obj_align(slot.bar, LV_ALIGN_LEFT_MID, 12, 0);
+        slot.tag = Theme_label(slot.card, "", UI_FONT_S, UI_COL_TEXT_FAINT);
+        lv_obj_set_pos(slot.tag, 34, 18);
+        slot.rel = lineLabel(slot.card, UI_FONT_L, UI_COL_ACCENT);
+        lv_obj_set_width(slot.rel, 200);
+        lv_obj_set_style_text_align(slot.rel, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(slot.rel, LV_ALIGN_TOP_RIGHT, -18, 14);
+        slot.title = Theme_label(slot.card, "", UI_FONT_XL, UI_COL_TEXT);
+        lv_obj_set_width(slot.title, kRightW - 56);
+        lv_label_set_long_mode(slot.title, LV_LABEL_LONG_DOT);
+        lv_obj_set_height(slot.title, lv_font_get_line_height(UI_FONT_XL) * 2 + 4);
+        lv_obj_set_pos(slot.title, 34, 42);
+        slot.when = lineLabel(slot.card, UI_FONT_L, UI_COL_TEXT);
+        lv_obj_set_width(slot.when, kRightW - 56);
+        lv_obj_set_pos(slot.when, 34, 118);
+        slot.account = lineLabel(slot.card, UI_FONT_S, UI_COL_TEXT_DIM);
+        lv_obj_set_width(slot.account, kRightW - 56);
+        lv_obj_set_pos(slot.account, 34, 148);
+        slot.desc = Theme_label(slot.card, "", UI_FONT_S, UI_COL_TEXT_FAINT);
+        lv_obj_set_width(slot.desc, kRightW - 56);
+        lv_label_set_long_mode(slot.desc, LV_LABEL_LONG_DOT);
+        lv_obj_set_height(slot.desc, lv_font_get_line_height(UI_FONT_S) * 2 + 2);
+        lv_obj_set_pos(slot.desc, 34, 168);
+        slot.hint = lineLabel(slot.card, UI_FONT_S, UI_COL_TEXT_FAINT);
+        lv_obj_set_width(slot.hint, kRightW - 56);
+        lv_obj_set_pos(slot.hint, 34, 202);
+
+        // The folded row.
+        slot.row = lv_obj_create(column);
+        Theme_plain(slot.row);
+        lv_obj_set_size(slot.row, kRightW, kRowH);
+        lv_obj_set_style_margin_bottom(slot.row, kSlotGap, 0);
+        lv_obj_set_flex_flow(slot.row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(slot.row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_gap(slot.row, 12, 0);
+        lv_obj_set_style_radius(slot.row, 10, 0);
+        lv_obj_set_style_bg_color(slot.row, UI_COL_SURFACE_ALT, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(slot.row, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_add_flag(slot.row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(slot.row, onSlotPress, LV_EVENT_PRESSED, index);
+        lv_obj_add_event_cb(slot.row, onRowClick, LV_EVENT_CLICKED, index);
+        lv_obj_add_event_cb(slot.row, onSlotHold, LV_EVENT_LONG_PRESSED, index);
+        slot.rowBar = bar(slot.row, 5, 30);
+        slot.rowTime = Theme_label(slot.row, "", UI_FONT_M, UI_COL_TEXT_DIM);
+        lv_obj_set_width(slot.rowTime, 84);
+        slot.rowTitle = lineLabel(slot.row, UI_FONT_L, UI_COL_TEXT);
+        lv_obj_set_flex_grow(slot.rowTitle, 1);
+
+        show(slot.card, false);
+        show(slot.row, false);
     }
 }
 } // namespace
@@ -790,8 +1005,8 @@ void Rest_wake()
     g_resting = false;
     g_forced = false;
     stopColonFade();
+    lv_obj_remove_flag(lv_screen_active(), LV_OBJ_FLAG_HIDDEN); // the app again, before this screen goes
     lv_obj_add_flag(g_root, LV_OBJ_FLAG_HIDDEN);
-    Toast_setSuppressed(false);
     board_set_backlight(static_cast<uint8_t>(Prefs_get().blActive));
     // Waking is itself activity: without this the very next tick could put it back to rest.
     lv_display_trigger_activity(nullptr);

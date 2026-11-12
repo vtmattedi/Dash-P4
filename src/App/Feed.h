@@ -29,13 +29,14 @@ struct FeedItem
     std::string startsAt; // ISO instant, or YYYY-MM-DD for an all-day event (see Calendar.h)
     std::string endsAt;   // exclusive, like Google's
     std::string dueAt;    // ISO instant or YYYY-MM-DD (tasks)
-    std::string url;
+    std::string url;     // the item's own page (an event's Google Calendar page, a Linear issue)
+    std::string joinUrl; // events: the link that joins the meeting itself (Meet, Zoom, Teams), when it has one
 
     bool operator==(const FeedItem &o) const
     {
         return numericId == o.numericId && id == o.id && source == o.source && kind == o.kind && title == o.title &&
                status == o.status && description == o.description && account == o.account && startsAt == o.startsAt &&
-               endsAt == o.endsAt && dueAt == o.dueAt && url == o.url;
+               endsAt == o.endsAt && dueAt == o.dueAt && url == o.url && joinUrl == o.joinUrl;
     }
 };
 

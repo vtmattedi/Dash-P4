@@ -65,7 +65,7 @@ later; the panel ignores keys it does not know.
 
 | `name` | `args` | Effect on the PC |
 |---|---|---|
-| `open_url` | `{"url":"https://..."}` | Opens the URL in the default browser. Only `http` and `https`, at most 2048 characters, no whitespace or control characters, and the host must pass the PC's allowlist when one is set. At most 5 per minute. |
+| `open_url` | `{"url":"https://...","browser":"chrome"}` (`browser` is `chrome` or `default`, optional) | Opens the URL in Chrome, or the default browser (also when Chrome is not found; the result says so). A `linear.app` link opens in the Linear desktop app (`linear://`) when it is installed. Only `http` and `https`, at most 2048 characters, no whitespace or control characters, and the host must pass the PC's allowlist when one is set. At most 5 per minute. |
 | `media` | `{"cmd":"play_pause\|next\|prev\|stop"}` | Presses the media key. (What is playing is not reported in v0.) |
 
 The PC maps an action **name** to its own code. The panel never sends commands to run. An unknown name answers

@@ -87,7 +87,7 @@ class Runner(unittest.IsolatedAsyncioTestCase):
     async def test_open_url_is_rate_limited(self):
         opened: list[str] = []
         now = [0.0]
-        runner = ActionRunner(opener=opened.append, clock=lambda: now[0], url_limit=(2, 60.0))
+        runner = ActionRunner(opener=lambda url, browser: opened.append(url), clock=lambda: now[0], url_limit=(2, 60.0))
         self.assertEqual(await runner.run("open_url", {"url": "https://a.com"}), (True, ""))
         self.assertEqual(await runner.run("open_url", {"url": "https://b.com"}), (True, ""))
         ok, msg = await runner.run("open_url", {"url": "https://c.com"})
@@ -97,7 +97,7 @@ class Runner(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(opened, ["https://a.com", "https://b.com", "https://c.com"])
 
     async def test_unknown_and_bad_arguments(self):
-        runner = ActionRunner(opener=lambda url: None)
+        runner = ActionRunner(opener=lambda url, browser: None)
         self.assertEqual(await runner.run("format_disk", {}), (False, "unknown action"))
         self.assertFalse((await runner.run("open_url", {"url": "javascript:1"}))[0])
         self.assertFalse((await runner.run("media", {"cmd": "volume_up"}))[0])
@@ -109,10 +109,16 @@ class Session(unittest.IsolatedAsyncioTestCase):
         await self.panel.start()
         self.window, self.media = StubWindow(), StubMedia()
         self.opened: list[str] = []
-        self.runner = ActionRunner(media=self.media, opener=self.opened.append)
+        self.browsers: list[str] = []
+        self.runner = ActionRunner(media=self.media, opener=self._open)
         self.link = Link("127.0.0.1", "secret", "desk", window=self.window, media=self.media, runner=self.runner,
                          port=self.panel.port, window_poll_s=0.05, connect_timeout_s=1.0)
         self.task: asyncio.Task | None = None
+
+    def _open(self, url: str, browser: str):
+        self.opened.append(url)
+        self.browsers.append(browser)
+        return "Chrome not found: used the default browser" if browser == "chrome" and url.endswith("/nochrome") else None
 
     async def asyncTearDown(self):
         if self.task:
@@ -161,6 +167,18 @@ class Session(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(by_id[third]["ok"])
         self.assertEqual(self.opened, ["https://example.com/x"])
         self.assertEqual(self.media.commands, ["next"])
+
+    async def test_open_url_in_chrome_and_the_note_comes_back(self):
+        await self.start()
+        first = await self.panel.send_action("open_url", {"url": "https://example.com/meet", "browser": "chrome"})
+        second = await self.panel.send_action("open_url", {"url": "https://example.com/nochrome", "browser": "chrome"})
+        third = await self.panel.send_action("open_url", {"url": "https://example.com/x", "browser": "netscape"})
+        await eventually(lambda: len(self.panel.results) == 3)
+        by_id = {r["id"]: r for r in self.panel.results}
+        self.assertEqual(self.browsers, ["chrome", "chrome"])
+        self.assertTrue(by_id[first]["ok"] and by_id[first]["msg"] == "")
+        self.assertTrue(by_id[second]["ok"] and "default browser" in by_id[second]["msg"])
+        self.assertFalse(by_id[third]["ok"])  # an unknown browser is refused, nothing is opened
 
     async def test_heartbeat_keeps_it_alive(self):
         await self.start()

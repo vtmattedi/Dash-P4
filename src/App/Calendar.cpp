@@ -63,6 +63,7 @@ void rebuild()
         e.description = item.description;
         e.status = item.status;
         e.url = item.url;
+        e.joinUrl = item.joinUrl;
         e.source = item.source;
         bool dateOnly = false;
         if (item.kind == "event")

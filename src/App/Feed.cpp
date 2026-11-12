@@ -167,6 +167,7 @@ bool Feed_parse(const char *json, size_t length, FeedDelta &out)
             item.endsAt = text(entry["ends_at"]);
             item.dueAt = text(entry["due_at"]);
             item.url = text(entry["url"]);
+            item.joinUrl = text(entry["join_url"]);
             parsed.items.push_back(std::move(item));
         }
     }
@@ -326,6 +327,10 @@ std::string Feed_serialize()
         if (!item.url.empty())
         {
             o["url"] = item.url;
+        }
+        if (!item.joinUrl.empty())
+        {
+            o["join_url"] = item.joinUrl;
         }
     }
     std::string out;

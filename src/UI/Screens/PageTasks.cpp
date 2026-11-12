@@ -6,6 +6,8 @@
 #include "App/Calendar.h"
 #include "App/Feed.h"
 #include "App/FeedSync.h"
+#include "App/Notifications.h"
+#include "Link/LinkServer.h"
 #include "Pages.h"
 #include "UI/Calendar/CalFormat.h"
 #include "UI/Calendar/EventDetail.h"
@@ -69,8 +71,36 @@ void onSource(lv_event_t *e)
     PageTasks_refresh(false);
 }
 
+bool g_suppressClick = false; // LVGL also sends a click when a long press is released
+
+void onPress(lv_event_t *) { g_suppressClick = false; }
+
+// Hold: open the task's link (a Linear issue, a WOI page) in Chrome on the linked PC.
+void onHold(lv_event_t *e)
+{
+    g_suppressClick = true;
+    const FeedItem *item = Feed_find(static_cast<int64_t>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e))));
+    if (!item || item->url.empty())
+    {
+        Notify(NotifySeverity::Info, "link", "No link", "This task has no link to open.");
+    }
+    else if (LinkServer_openUrl(item->url, "chrome") == 0)
+    {
+        Notify(NotifySeverity::Warn, "link", "No PC linked", "Start the companion app on the PC (Network page).");
+    }
+    else
+    {
+        Notify(NotifySeverity::Info, "link", "Opening on the PC", item->title);
+    }
+}
+
 void onOpen(lv_event_t *e)
 {
+    if (g_suppressClick)
+    {
+        g_suppressClick = false;
+        return;
+    }
     EventDetail_open(static_cast<int64_t>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e))));
 }
 
@@ -110,7 +140,9 @@ void addCard(lv_obj_t *list, const FeedItem &item, int64_t now)
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_gap(card, 6, 0);
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(card, onPress, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(card, onOpen, LV_EVENT_CLICKED, reinterpret_cast<void *>(static_cast<intptr_t>(item.numericId)));
+    lv_obj_add_event_cb(card, onHold, LV_EVENT_LONG_PRESSED, reinterpret_cast<void *>(static_cast<intptr_t>(item.numericId)));
 
     // Title row: up to two lines, and the dismiss button.
     lv_obj_t *top = Theme_row(card, lv_pct(100), LV_SIZE_CONTENT);

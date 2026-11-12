@@ -6,6 +6,7 @@
 #include "App/Net.h"
 #include "App/Notifications.h"
 #include "App/Registry.h"
+#include "Link/LinkServer.h"
 #include "Pages.h"
 #include "UI/Explorer/DeviceSheet.h"
 #include "UI/Modal.h"
@@ -28,6 +29,8 @@ lv_obj_t *g_search;
 lv_obj_t *g_filterButtons[FilterCount];
 lv_obj_t *g_sortLabel;
 lv_obj_t *g_summary;
+lv_obj_t *g_linkDot, *g_linkTitle, *g_linkSub; // the PC link card
+uint32_t g_lastLinkMs = 0;
 lv_obj_t *g_gateways;
 lv_obj_t *g_list;
 
@@ -233,6 +236,38 @@ void styleFilters()
     Theme_setText(g_sortLabel, g_sort == SortName ? "Sort: status" : "Sort: recent");
 }
 
+// The PC link (pc/PROTOCOL.md): who is linked, or what to type on the PC to link.
+void refreshLink()
+{
+    const LinkStatus link = LinkServer_status();
+    lv_obj_set_style_bg_color(g_linkDot, link.connected ? UI_COL_OK : link.listening ? UI_COL_WARN : UI_COL_TEXT_FAINT, 0);
+    char title[200];
+    if (link.connected)
+    {
+        snprintf(title, sizeof(title), "PC link: %s  (%s, %s)", link.peer.c_str(), link.peerOs.c_str(),
+                 link.peerAddress.c_str());
+    }
+    else
+    {
+        snprintf(title, sizeof(title), "PC link: %s", link.message.c_str());
+    }
+    Theme_setText(g_linkTitle, title);
+    char sub[240];
+    if (link.connected)
+    {
+        snprintf(sub, sizeof(sub), "%s", link.window.empty() ? "focused window: none" : link.window.c_str());
+    }
+    else if (link.ip.empty())
+    {
+        snprintf(sub, sizeof(sub), "Token %s", LinkServer_token().c_str());
+    }
+    else
+    {
+        snprintf(sub, sizeof(sub), "python -m dashlink --host %s --token %s", link.ip.c_str(), LinkServer_token().c_str());
+    }
+    Theme_setText(g_linkSub, sub);
+}
+
 void onSearch(lv_event_t *)
 {
     g_query = lv_textarea_get_text(g_search);
@@ -281,6 +316,23 @@ lv_obj_t *PageNetwork_create(lv_obj_t *parent)
     });
 
     g_summary = Theme_label(page, "", UI_FONT_S, UI_COL_TEXT_DIM);
+    lv_obj_t *link = Theme_card(page, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_t *linkRow = Theme_row(link, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_gap(linkRow, 14, 0);
+    lv_obj_set_flex_align(linkRow, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    g_linkDot = Theme_dot(linkRow, 14, UI_COL_TEXT_FAINT);
+    lv_obj_t *linkText = Theme_column(linkRow, 0, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(linkText, 1);
+    lv_obj_set_style_pad_gap(linkText, 2, 0);
+    g_linkTitle = Theme_label(linkText, "", UI_FONT_M, UI_COL_TEXT);
+    lv_obj_set_width(g_linkTitle, lv_pct(100));
+    g_linkSub = Theme_label(linkText, "", UI_FONT_S, UI_COL_TEXT_DIM);
+    lv_obj_set_width(g_linkSub, lv_pct(100));
+    Theme_actionButton(linkRow, "New token", 130, 44, Tone::Neutral, [] {
+        LinkServer_setToken(std::string()); // a new random one; a linked PC is dropped
+        refreshLink();
+    });
+
     g_gateways = Theme_row(page, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_add_flag(g_gateways, LV_OBJ_FLAG_HIDDEN);
 
@@ -291,11 +343,17 @@ lv_obj_t *PageNetwork_create(lv_obj_t *parent)
     lv_obj_set_style_pad_gap(g_list, 8, 0);
 
     styleFilters();
+    refreshLink();
     return page;
 }
 
 void PageNetwork_refresh(bool force)
 {
+    if (force || nowMs() - g_lastLinkMs >= 1000)
+    {
+        g_lastLinkMs = nowMs();
+        refreshLink();
+    }
     const std::vector<const Device *> devices = selection();
     const bool changed = force || g_shownStructure != Registry_structureRevision() || g_shownQuery != g_query ||
                          g_shownFilter != g_filter || g_shownSort != g_sort ||

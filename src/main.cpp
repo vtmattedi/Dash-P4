@@ -14,12 +14,6 @@
 #include "App/App.h"
 #include "App/Heap.h"
 #include "App/Prefs.h"
-#if DASH_PC_SCREEN
-#include "App/PcScreen.h"
-#endif
-#if DASH_CAMERA
-#include "App/CameraMode.h"
-#endif
 #include "UI/Rest.h"
 #include "UI/Ui.h"
 
@@ -64,16 +58,6 @@ extern "C" void app_main(void)
     // Opens the settings store and the device identity.
     introNightMareESP();
     App_loadSettings();
-#if DASH_CAMERA
-    // The camera, and the USB port's choice between the PC screen and the webcam (the user's last one). Before the
-    // PC screen: the USB device presents whichever personality is preferred, whichever registers first.
-    CameraMode_begin();
-#endif
-#if DASH_PC_SCREEN
-    // The Windows USB screen on the high-speed port. Before the radio: the C6 bring-up below blocks for
-    // seconds, and the PC should see the display as soon as it is plugged in.
-    PcScreen_begin();
-#endif
 
     // The Wi-Fi radio is the ESP32-C6 behind ESP-Hosted. esp_wifi_remote does NOT bring the
     // transport up by itself: without this, esp_wifi_init() fails with "Transport not

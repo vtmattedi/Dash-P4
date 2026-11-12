@@ -86,6 +86,10 @@ void EventDetail_open(int64_t numericId)
     {
         line(body, when, UI_FONT_L, UI_COL_ACCENT);
     }
+    if (!item.joinUrl.empty())
+    {
+        line(body, "Join: " + item.joinUrl, UI_FONT_M, UI_COL_INFO);
+    }
     std::string origin = item.account.empty() ? item.source : item.account + "  \xE2\x80\xA2  " + item.source;
     if (!item.status.empty())
     {

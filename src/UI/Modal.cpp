@@ -201,9 +201,9 @@ void onCloseClick(lv_event_t *e)
 
 void animTranslateX(void *obj, int32_t v) { lv_obj_set_style_translate_x(static_cast<lv_obj_t *>(obj), v, 0); }
 void animTranslateY(void *obj, int32_t v) { lv_obj_set_style_translate_y(static_cast<lv_obj_t *>(obj), v, 0); }
-// Fades only the scrim's own dimming. Animating the object's opacity instead would make LVGL render the whole modal (panel,
-// text, every row) into an offscreen ARGB layer on every frame of the animation, which is very slow on this display.
-void animScrimDim(void *obj, int32_t v) { lv_obj_set_style_bg_opa(static_cast<lv_obj_t *>(obj), static_cast<lv_opa_t>(v), 0); }
+// The scrim is NOT animated. Fading it (or the modal's opacity) is a full-screen translucent animation: every frame LVGL
+// re-renders and re-blends everything under it, which dropped the UI to ~22 fps. It appears at its final dimming; only
+// the panel moves, so only the panel's own area is redrawn per frame.
 
 void animate(lv_obj_t *obj, lv_anim_exec_xcb_t cb, int32_t from, int32_t to, uint32_t ms)
 {
@@ -315,7 +315,6 @@ ModalId Modal_open(const ModalOptions &options, lv_obj_t **bodyOut, lv_obj_t **f
     lv_obj_move_foreground(m->scrim);
 
     // Entrance.
-    animate(m->scrim, animScrimDim, 0, LV_OPA_60, 160);
     if (side)
     {
         animate(m->panel, animTranslateX, widthFor(m->size) / 3, 0, 220);

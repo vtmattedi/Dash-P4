@@ -32,7 +32,7 @@ struct CalEntry
     bool allDay = false;
     int64_t start = 0; // epoch seconds (UTC); for all-day, local midnight of the first day
     int64_t end = 0;   // exclusive; == start for a Due entry
-    std::string title, account, description, status, url, source;
+    std::string title, account, description, status, url, joinUrl, source;
 };
 
 /// Parse a feed timestamp. `dateOnly` is set for "YYYY-MM-DD", whose epoch is local midnight. False on anything
