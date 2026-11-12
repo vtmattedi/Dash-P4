@@ -4,38 +4,28 @@
 #include <time.h>
 
 #include "App/Notifications.h"
-#include "NotificationCentre.h"
-#include "Rest.h"
+#include "Drawer.h"
 #include "StatusIcons.h"
 #include "Theme.h"
-#if DASH_PC_SCREEN
-#include "PcLink/PcLink.h"
-#endif
 
 namespace
 {
-lv_obj_t *g_title;
+constexpr uint32_t kMessageMs = 4000;
+constexpr int kDrawerSwipePx = 40;
+
 StatusIcons g_icons;
 lv_obj_t *g_clock;
-lv_obj_t *g_bell;
-lv_obj_t *g_badge;
-lv_obj_t *g_badgeLabel;
-#if DASH_PC_SCREEN
-lv_obj_t *g_pc; // "show the PC" -- only while the PC streams and is not on the panel
-#endif
-}
-
-// The global way back to the rest screen, on every page: swipe down from the status bar. (The way out of it is the
-// swipe up from the bottom edge of the rest screen.)
-namespace
-{
-constexpr int kRestSwipePx = 70;
+lv_obj_t *g_message;
+uint32_t g_messageUntil = 0; // lv_tick_get() deadline; 0 = none
+int32_t g_swipeStartX = 0;
 int32_t g_swipeStartY = 0;
 
+// Swipe down from the bar: the drawer.
 void onBarPress(lv_event_t *)
 {
     lv_point_t p = {0, 0};
     lv_indev_get_point(lv_indev_active(), &p);
+    g_swipeStartX = p.x;
     g_swipeStartY = p.y;
 }
 
@@ -43,12 +33,37 @@ void onBarRelease(lv_event_t *)
 {
     lv_point_t p = {0, 0};
     lv_indev_get_point(lv_indev_active(), &p);
-    if (p.y - g_swipeStartY >= kRestSwipePx)
+    // Only from the right, where the drawer hangs; a swipe on the clock or the middle does nothing.
+    if (g_swipeStartX >= Drawer_left() && p.y - g_swipeStartY >= kDrawerSwipePx)
     {
-        Rest_now();
+        Drawer_open();
     }
 }
 } // namespace
+
+void Notify(NotifySeverity severity, const std::string &, const std::string &title, const std::string &body)
+{
+    if (g_message == nullptr)
+    {
+        return;
+    }
+    const lv_color_t colour = severity == NotifySeverity::Crit   ? UI_COL_DANGER
+                              : severity == NotifySeverity::Warn ? UI_COL_WARN
+                              : severity == NotifySeverity::Ok   ? UI_COL_OK
+                                                                 : UI_COL_TEXT;
+    std::string text = title;
+    if (!body.empty())
+    {
+        text += " - " + body;
+    }
+    lv_obj_set_style_text_color(g_message, colour, 0);
+    Theme_setText(g_message, text.c_str());
+    g_messageUntil = lv_tick_get() + kMessageMs;
+    if (g_messageUntil == 0)
+    {
+        g_messageUntil = 1;
+    }
+}
 
 lv_obj_t *StatusBar_create(lv_obj_t *parent)
 {
@@ -69,42 +84,14 @@ lv_obj_t *StatusBar_create(lv_obj_t *parent)
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(bar, 14, 0);
 
-    g_title = Theme_label(bar, "", UI_FONT_L, UI_COL_TEXT);
-    lv_obj_set_flex_grow(g_title, 1);
-
-#if DASH_PC_SCREEN
-    g_pc = Theme_button(bar, LV_SYMBOL_IMAGE "  PC", 96, 36, Tone::Accent);
-    lv_obj_add_event_cb(g_pc, [](lv_event_t *) { PcLink_show(); }, LV_EVENT_CLICKED, nullptr);
-    lv_obj_add_flag(g_pc, LV_OBJ_FLAG_HIDDEN);
-#endif
-
-    StatusIcons_create(g_icons, bar, UI_STATUSBAR_H - 2);
     g_clock = Theme_label(bar, "--:--", UI_FONT_L, UI_COL_TEXT);
-
-    // Bell with an unread badge.
-    g_bell = Theme_iconButton(bar, LV_SYMBOL_BELL, 38, Tone::Neutral);
-    lv_obj_set_style_bg_opa(g_bell, LV_OPA_TRANSP, 0);
-    lv_obj_add_event_cb(g_bell, [](lv_event_t *) { NotificationCentre_open(); }, LV_EVENT_CLICKED, nullptr);
-    g_badge = lv_obj_create(g_bell);
-    lv_obj_remove_style_all(g_badge);
-    lv_obj_set_size(g_badge, 20, 20);
-    lv_obj_set_style_radius(g_badge, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(g_badge, UI_COL_DANGER, 0);
-    lv_obj_set_style_bg_opa(g_badge, LV_OPA_COVER, 0);
-    lv_obj_add_flag(g_badge, LV_OBJ_FLAG_FLOATING);
-    lv_obj_remove_flag(g_badge, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(g_badge, LV_ALIGN_TOP_RIGHT, 2, -2);
-    g_badgeLabel = Theme_label(g_badge, "0", UI_FONT_S, lv_color_white());
-    lv_obj_center(g_badgeLabel);
-    lv_obj_add_flag(g_badge, LV_OBJ_FLAG_HIDDEN);
+    g_message = Theme_label(bar, "", UI_FONT_M, UI_COL_TEXT);
+    lv_label_set_long_mode(g_message, LV_LABEL_LONG_DOT);
+    lv_obj_set_flex_grow(g_message, 1);
+    StatusIcons_create(g_icons, bar, UI_STATUSBAR_H - 2);
 
     StatusBar_refresh();
     return bar;
-}
-
-void StatusBar_setTitle(const char *title)
-{
-    Theme_setText(g_title, title);
 }
 
 void StatusBar_refresh()
@@ -120,29 +107,12 @@ void StatusBar_refresh()
     }
     Theme_setText(g_clock, text);
 
-#if DASH_PC_SCREEN
-    if (PcLink_link() == USB_SCREEN_STREAMING && !PcLink_showing())
-    {
-        lv_obj_remove_flag(g_pc, LV_OBJ_FLAG_HIDDEN);
-    }
-    else
-    {
-        lv_obj_add_flag(g_pc, LV_OBJ_FLAG_HIDDEN);
-    }
-#endif
 
     StatusIcons_refresh(g_icons);
 
-    const uint32_t unread = Notifications_unread();
-    if (unread == 0)
+    if (g_messageUntil != 0 && static_cast<int32_t>(lv_tick_get() - g_messageUntil) >= 0)
     {
-        lv_obj_add_flag(g_badge, LV_OBJ_FLAG_HIDDEN);
-    }
-    else
-    {
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%u", unread > 99 ? 99u : (unsigned)unread);
-        Theme_setText(g_badgeLabel, buf);
-        lv_obj_remove_flag(g_badge, LV_OBJ_FLAG_HIDDEN);
+        g_messageUntil = 0;
+        Theme_setText(g_message, "");
     }
 }

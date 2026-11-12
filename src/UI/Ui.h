@@ -2,7 +2,7 @@
 #include "lvgl.h"
 
 // The screen manager: status bar on top, navigation rail on the left, one page at a
-// time in the remaining 928x556, and a banner above the page for live conditions.
+// time in the remaining 928x556.
 
 enum UiPage
 {
@@ -10,12 +10,6 @@ enum UiPage
     UI_PAGE_CALENDAR, // the feed's events and deadlines by day
     UI_PAGE_TASKS,    // Linear and WOI tasks, filtered by source and status
     UI_PAGE_NETWORK,
-#if DASH_PC_SCREEN
-    UI_PAGE_PC, // the PC's display: opening the tab connects and shows it (PcLink_show)
-#endif
-#if DASH_CAMERA
-    UI_PAGE_CAMERA, // the board's camera live, its picture controls, and the USB webcam switch
-#endif
     UI_PAGE_SETTINGS,
     UI_PAGE_COUNT
 };
@@ -25,6 +19,11 @@ void Ui_begin(lv_display_t *display);
 
 void Ui_show(UiPage page);
 UiPage Ui_current();
+
+/// LVGL's own FPS / CPU / render-time readout (bottom right of the panel). Shared by Settings > Display > "Show FPS" and
+/// the console's PERF command, so they cannot disagree. LVGL task only.
+bool Ui_perfShown();
+void Ui_setPerf(bool on);
 
 /// The container a page draws into (all pages are built at boot and hidden when not shown).
 lv_obj_t *Ui_pageContainer(UiPage page);

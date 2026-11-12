@@ -9,10 +9,10 @@
 
 #include "../../src/App/Battery.h"
 #include "../../src/App/Calendar.h"
+#include "../../src/Link/LinkProto.h"
 #include "../../src/App/SysMon.h"
 #include "../../src/App/Feed.h"
 #include "../../src/App/Mqttp.h"
-#include "../../src/App/Notifications.h"
 #include "../../src/App/Registry.h"
 #include "../../src/Explorer/DeviceView.h"
 #include "../../src/Explorer/Facts.h"
@@ -49,78 +49,6 @@ static NetMessage msg(const std::string &topic, const std::string &payload, bool
     t = topic;
     p = payload;
     return NetMessage{t.c_str(), reinterpret_cast<const uint8_t *>(p.c_str()), p.size(), retained, g_now};
-}
-
-// --- Notifications ----------------------------------------------------------------
-
-static int g_events = 0;
-static NotifyEvent g_lastEvent;
-static void onNotify(const Notification &, NotifyEvent e)
-{
-    ++g_events;
-    g_lastEvent = e;
-}
-
-static void testNotifications()
-{
-    Notifications_setClock(fakeNow, fakeEpoch);
-    Notifications_onChange(onNotify);
-
-    const uint32_t a = Notify(NotifySeverity::Info, "t", "first");
-    CHECK(a == 1);
-    CHECK(Notifications_count() == 1);
-    CHECK(Notifications_unread() == 1);
-    CHECK(Notifications_at(0).title == "first");
-    CHECK(Notifications_at(0).epoch == 1800000000);
-
-    Notify(NotifySeverity::Warn, "t", "second");
-    CHECK(Notifications_at(0).title == "second"); // newest first
-
-    // Sticky: one entry per key, identical repeat is ignored.
-    const int before = g_events;
-    const uint32_t s1 = NotifySticky("k", NotifySeverity::Warn, "net", "down");
-    const uint32_t s2 = NotifySticky("k", NotifySeverity::Warn, "net", "down");
-    CHECK(s1 == s2);
-    CHECK(g_events == before + 1);
-    CHECK(Notifications_activeCount() == 1);
-    NotifySticky("k", NotifySeverity::Crit, "net", "down hard");
-    CHECK(g_lastEvent == NotifyEvent::Updated);
-    CHECK(Notifications_activeCount() == 1);
-    CHECK(Notifications_activeAt(0).severity == NotifySeverity::Crit);
-
-    // Clear with a resolution message.
-    const size_t countBefore = Notifications_count();
-    NotifyClear("k", "back up");
-    CHECK(Notifications_activeCount() == 0);
-    CHECK(Notifications_count() == countBefore + 1);
-    CHECK(Notifications_at(0).title == "back up");
-    CHECK(Notifications_at(0).severity == NotifySeverity::Ok);
-    NotifyClear("k"); // already clear: nothing happens
-    CHECK(Notifications_count() == countBefore + 1);
-
-    // Read state.
-    CHECK(Notifications_unread() > 0);
-    Notifications_markAllRead();
-    CHECK(Notifications_unread() == 0);
-
-    // Capacity: history is bounded, live conditions survive.
-    NotifySticky("live", NotifySeverity::Warn, "net", "still true");
-    for (int i = 0; i < NOTIFICATIONS_CAPACITY + 40; ++i)
-    {
-        Notify(NotifySeverity::Info, "t", "n" + std::to_string(i));
-    }
-    CHECK(Notifications_count() <= NOTIFICATIONS_CAPACITY);
-    CHECK(Notifications_activeCount() == 1);
-
-    // Async: nothing until the tick.
-    const size_t c = Notifications_count();
-    NotifyAsync(NotifySeverity::Info, "bg", "from another task");
-    CHECK(Notifications_count() == c);
-    Notifications_tick();
-    CHECK(Notifications_at(0).title == "from another task");
-
-    Notifications_clearHistory();
-    CHECK(Notifications_count() == 1); // only the live condition
 }
 
 // --- Registry ---------------------------------------------------------------------
@@ -902,7 +830,7 @@ void testFeedCache()
     Feed_begin("", feedSave);
     FeedDelta d = parseOk(R"({"version":5,"epoch":"e1","full":true,"items":[
       {"numeric_id":1,"id":"l:1","source":"linear","kind":"task","title":"Pão à noite","status":"todo","due_at":"2026-11-12","connection":{"alias":"Work"}},
-      {"numeric_id":2,"id":"g:2","source":"google_calendar","kind":"event","title":"Standup","starts_at":"2026-11-12T14:00:00-03:00","ends_at":"2026-11-12T14:30:00-03:00"}]})");
+      {"numeric_id":2,"id":"g:2","source":"google_calendar","kind":"event","title":"Standup","starts_at":"2026-11-12T14:00:00-03:00","ends_at":"2026-11-12T14:30:00-03:00","url":"https://calendar.google.com/calendar/event?eid=x","join_url":"https://meet.google.com/abc-defg-hij"}]})");
     CHECK(Feed_apply(d));
 
     // snapshot -> empty cache -> restore: same content, same cursor
@@ -914,6 +842,8 @@ void testFeedCache()
     CHECK(Feed_find(1) && Feed_find(1)->title == "P\xC3\xA3o \xC3\xA0 noite" && Feed_find(1)->account == "Work" &&
           Feed_find(1)->dueAt == "2026-11-12" && Feed_find(1)->status == "todo");
     CHECK(Feed_find(2) && Feed_find(2)->startsAt == "2026-11-12T14:00:00-03:00");
+    CHECK(Feed_find(2)->joinUrl == "https://meet.google.com/abc-defg-hij" && Feed_find(2)->url.rfind("https://calendar.google.com", 0) == 0);
+    CHECK(Feed_find(1)->joinUrl.empty()); // a task has none
     CHECK(!Feed_restore("garbage") && Feed_total() == 2); // a bad file leaves the cache alone
 
     // the saver: one write per burst of changes, none for what was just restored
@@ -940,6 +870,80 @@ void testFeedCache()
     Feed_setCacheSaver(nullptr);
 }
 
+void testLinkProto()
+{
+    // HMAC-SHA256 against RFC 4231 test cases 1 and 2
+    CHECK(LinkProto::toHex(LinkProto::hmacSha256(std::string(20, ''), "Hi There")) ==
+          "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+    CHECK(LinkProto::toHex(LinkProto::hmacSha256("Jefe", "what do ya want for nothing?")) ==
+          "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    // a key longer than the block size is hashed first (RFC 4231 case 6)
+    CHECK(LinkProto::toHex(LinkProto::hmacSha256(std::string(131, 'ª'),
+                                                 "Test Using Larger Than Block-Size Key - Hash Key First")) ==
+          "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
+
+    // the proof the Python app (pc/dashlink/protocol.py) computes for the same inputs
+    CHECK(LinkProto::proof("secret", "00112233445566778899aabbccddeeff", "desk") ==
+          "cece2869e341f73926cc74026d3de54f331328e7e2c4edc526df9c694e8f046c");
+    CHECK(LinkProto::verifyProof("secret", "00112233445566778899aabbccddeeff", "desk",
+                                 "cece2869e341f73926cc74026d3de54f331328e7e2c4edc526df9c694e8f046c"));
+    CHECK(!LinkProto::verifyProof("other", "00112233445566778899aabbccddeeff", "desk",
+                                  "cece2869e341f73926cc74026d3de54f331328e7e2c4edc526df9c694e8f046c"));
+    CHECK(!LinkProto::verifyProof("secret", "00112233445566778899aabbccddeeff", "desk", "cece"));
+    CHECK(!LinkProto::verifyProof("secret", "00112233445566778899aabbccddeeff", "desk", ""));
+
+    // framing: encode, then parse the stream in awkward pieces
+    const std::string a = LinkProto::encodeFrame(LinkProto::kPing, "{\"t\":5}");
+    const std::string b = LinkProto::encodeFrame(LinkProto::kState, "{\"window\":null}");
+    const std::string c = LinkProto::encodeFrame(LinkProto::kPong);
+    CHECK(a.size() == 4 + 1 + 7 && static_cast<unsigned char>(a[0]) == 8 && a[4] == 'P');
+    const std::string stream = a + b + c;
+    LinkProto::FrameParser parser;
+    char type = 0;
+    std::string json;
+    int frames = 0;
+    for (size_t i = 0; i < stream.size(); ++i) // one byte at a time
+    {
+        parser.feed(reinterpret_cast<const uint8_t *>(stream.data()) + i, 1);
+        while (parser.next(type, json) == LinkProto::FrameParser::Result::Frame)
+        {
+            ++frames;
+            if (frames == 1) CHECK(type == 'P' && json == "{\"t\":5}");
+            if (frames == 2) CHECK(type == 'S' && json == "{\"window\":null}");
+            if (frames == 3) CHECK(type == 'O' && json.empty());
+        }
+    }
+    CHECK(frames == 3);
+    CHECK(parser.next(type, json) == LinkProto::FrameParser::Result::NeedMore);
+
+    // all at once, then a bad length poisons the stream
+    LinkProto::FrameParser whole;
+    whole.feed(reinterpret_cast<const uint8_t *>(stream.data()), stream.size());
+    int count = 0;
+    while (whole.next(type, json) == LinkProto::FrameParser::Result::Frame) ++count;
+    CHECK(count == 3);
+    for (const char *bad : {"    ", "@  S"}) // length 0; length 16385
+    {
+        LinkProto::FrameParser broken;
+        broken.feed(reinterpret_cast<const uint8_t *>(bad), 5);
+        CHECK(broken.next(type, json) == LinkProto::FrameParser::Result::Error);
+        broken.feed(reinterpret_cast<const uint8_t *>(a.data()), a.size());
+        CHECK(broken.next(type, json) == LinkProto::FrameParser::Result::Error); // stays failed until reset
+        broken.reset();
+        broken.feed(reinterpret_cast<const uint8_t *>(a.data()), a.size());
+        CHECK(broken.next(type, json) == LinkProto::FrameParser::Result::Frame);
+    }
+    // the largest legal frame passes, one byte more does not
+    const std::string big = LinkProto::encodeFrame('S', std::string(LinkProto::kMaxFrame - 1, 'x'));
+    LinkProto::FrameParser large;
+    large.feed(reinterpret_cast<const uint8_t *>(big.data()), big.size());
+    CHECK(large.next(type, json) == LinkProto::FrameParser::Result::Frame && json.size() == LinkProto::kMaxFrame - 1);
+    const std::string tooBig = LinkProto::encodeFrame('S', std::string(LinkProto::kMaxFrame, 'x'));
+    LinkProto::FrameParser huge;
+    huge.feed(reinterpret_cast<const uint8_t *>(tooBig.data()), tooBig.size());
+    CHECK(huge.next(type, json) == LinkProto::FrameParser::Result::Error);
+}
+
 void testSysMon()
 {
     CHECK(SysMon_usedPercent(25, 100) == 75 && SysMon_usedPercent(0, 100) == 100 && SysMon_usedPercent(100, 100) == 0);
@@ -959,7 +963,6 @@ void testBattery()
 
 int main()
 {
-    testNotifications();
     testRegistry();
     testMqttp();
     testManifest();
@@ -971,6 +974,7 @@ int main()
     testFeed();
     testCalendar();
     testFeedCache();
+    testLinkProto();
     testSysMon();
     testBattery();
     printf("%d checks, %d failed\n", g_checks, g_failed);

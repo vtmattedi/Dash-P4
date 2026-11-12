@@ -15,16 +15,13 @@
 #include "UI/Bind.h"
 #include "UI/Modal.h"
 #include "UI/Rest.h"
+#include "UI/Ui.h"
 #include "UI/Theme.h"
 #include "UI/WifiSetup.h"
 #include "board.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#if DASH_PC_SCREEN
-#include "App/PcScreen.h"
-#include "PcLink/PcLink.h"
-#endif
 
 // Settings: display, network, what the panel is bound to, diagnostics, about.
 // Notification preferences and the Explorer's defaults join in later phases.
@@ -35,7 +32,6 @@ lv_obj_t *g_backlightValue, *g_restBacklightValue, *g_restAfterValue;
 lv_obj_t *g_wifi, *g_transport;
 lv_obj_t *g_bindingText[static_cast<int>(Role::Count)];
 lv_obj_t *g_about;
-bool g_stickyOn = false;
 uint32_t g_bindingsShown = UINT32_MAX;
 
 lv_obj_t *sectionRow(lv_obj_t *card, const char *label, lv_obj_t **valueOut = nullptr)
@@ -131,64 +127,6 @@ lv_obj_t *sliderRow(lv_obj_t *card, const char *label, int min, int max, int val
 
 // --- Network ----------------------------------------------------------------------------
 
-#if DASH_PC_SCREEN
-// --- PC screen ---------------------------------------------------------------------------
-
-lv_obj_t *g_pcSummary;
-
-void onPcShow(lv_event_t *) { PcLink_show(); }
-
-void onPcAuto(lv_event_t *e)
-{
-    const bool on = lv_obj_has_state(static_cast<lv_obj_t *>(lv_event_get_target(e)), LV_STATE_CHECKED);
-    Prefs_setPcAuto(on);
-    PcLink_setAuto(on);
-}
-
-void onPcTab(lv_event_t *e)
-{
-    const bool on = lv_obj_has_state(static_cast<lv_obj_t *>(lv_event_get_target(e)), LV_STATE_CHECKED);
-    Prefs_setPcTab(on);
-    PcLink_setTab(on);
-}
-
-void buildPcScreen(lv_obj_t *page)
-{
-    lv_obj_t *card = Theme_card(page, lv_pct(100), LV_SIZE_CONTENT);
-    Theme_cardHeader(card, "PC screen");
-    g_pcSummary = Theme_label(card, "", UI_FONT_M, UI_COL_TEXT_DIM);
-    lv_obj_t *row = Theme_row(card, lv_pct(100), 56);
-    buttonIn(row, LV_SYMBOL_IMAGE "  Show the PC screen", 280, onPcShow, Tone::Accent);
-    lv_obj_t *spacer = lv_obj_create(row);
-    Theme_plain(spacer);
-    lv_obj_set_height(spacer, 1);
-    lv_obj_set_flex_grow(spacer, 1);
-    Theme_label(row, "Switch to the PC when it streams", UI_FONT_M, UI_COL_TEXT_DIM);
-    lv_obj_t *sw = lv_switch_create(row);
-    if (Prefs_get().pcAuto)
-    {
-        lv_obj_add_state(sw, LV_STATE_CHECKED);
-    }
-    lv_obj_add_event_cb(sw, onPcAuto, LV_EVENT_VALUE_CHANGED, nullptr);
-    lv_obj_t *tabRow = Theme_row(card, lv_pct(100), 56);
-    lv_obj_t *tabSpacer = lv_obj_create(tabRow);
-    Theme_plain(tabSpacer);
-    lv_obj_set_height(tabSpacer, 1);
-    lv_obj_set_flex_grow(tabSpacer, 1);
-    Theme_label(tabRow, "Menu tab on the PC screen", UI_FONT_M, UI_COL_TEXT_DIM);
-    lv_obj_t *tabSw = lv_switch_create(tabRow);
-    if (Prefs_get().pcTab)
-    {
-        lv_obj_add_state(tabSw, LV_STATE_CHECKED);
-    }
-    lv_obj_add_event_cb(tabSw, onPcTab, LV_EVENT_VALUE_CHANGED, nullptr);
-    Theme_label(card,
-                "Windows extended display over the high-speed USB-C port (Espressif USB Extended Display driver). "
-                "The PC tab and the status bar's PC button show it. On the PC's picture the tab at the left edge opens "
-                "Rest / Settings / Disconnect / Cancel; Settings, Disconnect and holding three fingers for two seconds close the connection.",
-                UI_FONT_S, UI_COL_TEXT_FAINT);
-}
-#endif
 
 void onWifi(lv_event_t *) { WifiSetup_open(); }
 
@@ -254,20 +192,6 @@ void refreshBindings()
 void notifyOf(NotifySeverity s, const char *title, const char *body)
 {
     Notify(s, "diagnostics", title, body);
-}
-
-void onSticky(lv_event_t *)
-{
-    g_stickyOn = !g_stickyOn;
-    if (g_stickyOn)
-    {
-        NotifySticky("diag.sticky", NotifySeverity::Warn, "diagnostics", "Test condition is live",
-                     "Tap the banner to open the notification centre");
-    }
-    else
-    {
-        NotifyClear("diag.sticky", "Test condition cleared");
-    }
 }
 
 void onConfirm(lv_event_t *)
@@ -355,6 +279,13 @@ void onOutput(lv_event_t *)
 void onBoardTest(lv_event_t *) { BoardTest_create(lv_layer_top()); }
 
 void onRestNow(lv_event_t *) { Rest_now(); }
+
+// The FPS / render-time readout: for judging smoothness by number instead of by eye.
+void onPerf(lv_event_t *e)
+{
+    Ui_setPerf(!Ui_perfShown());
+    lv_label_set_text(lv_obj_get_child(lv_event_get_target_obj(e), 0), Ui_perfShown() ? "Hide FPS" : "Show FPS");
+}
 
 // --- Firmware update ---------------------------------------------------------------------
 
@@ -494,10 +425,8 @@ lv_obj_t *PageSettings_create(lv_obj_t *parent)
     lv_label_set_text(g_restAfterValue, buf);
     lv_obj_t *restRow = Theme_row(display, lv_pct(100), 56);
     buttonIn(restRow, "Rest now", 180, onRestNow);
+    buttonIn(restRow, Ui_perfShown() ? "Hide FPS" : "Show FPS", 180, onPerf);
 
-#if DASH_PC_SCREEN
-    buildPcScreen(page);
-#endif
 
     // Network.
     lv_obj_t *net = Theme_card(page, lv_pct(100), LV_SIZE_CONTENT);
@@ -556,7 +485,6 @@ lv_obj_t *PageSettings_create(lv_obj_t *parent)
     buttonIn(grid, "Toast: ok", 200, [](lv_event_t *) { notifyOf(NotifySeverity::Ok, "All good", "That worked."); }, Tone::Ok);
     buttonIn(grid, "Toast: warning", 200, [](lv_event_t *) { notifyOf(NotifySeverity::Warn, "Careful", "Adler has gone quiet."); }, Tone::Warn);
     buttonIn(grid, "Toast: critical", 200, [](lv_event_t *) { notifyOf(NotifySeverity::Crit, "Door open", "Front door open for 10 minutes. Tap to dismiss."); }, Tone::Danger);
-    buttonIn(grid, "Toggle live banner", 200, onSticky);
     buttonIn(grid, "Modal: confirm", 200, onConfirm);
     buttonIn(grid, "Modal: form", 200, onForm);
     buttonIn(grid, "Modal: busy", 200, onBusy);
@@ -592,9 +520,6 @@ void PageSettings_refresh(bool force)
     }
     lastMs = now;
     refreshNetwork();
-#if DASH_PC_SCREEN
-    Theme_setText(g_pcSummary, PcScreen_summary());
-#endif
 
     esp_chip_info_t chip;
     esp_chip_info(&chip);
