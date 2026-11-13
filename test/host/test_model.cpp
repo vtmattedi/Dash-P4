@@ -14,6 +14,8 @@
 #include "../../src/App/Feed.h"
 #include "../../src/App/Mqttp.h"
 #include "../../src/App/Registry.h"
+#include "../../src/App/Stackport.h"
+#include "../../src/App/StackportSim.h"
 #include "../../src/Explorer/DeviceView.h"
 #include "../../src/Explorer/Facts.h"
 #include "../../src/Explorer/Manifest.h"
@@ -57,6 +59,133 @@ static std::vector<std::string> g_presenceLog;
 static void onPresence(const Device &d, bool online, bool firstSeen)
 {
     g_presenceLog.push_back(d.name + (online ? ":up" : ":down") + (firstSeen ? ":first" : ""));
+}
+
+// --- Stackport tracker ------------------------------------------------------------
+
+static void testStackport()
+{
+    Stackport_reset();
+    CHECK(Stackport_link() == SpLink::None && !Stackport_hasData() && !Stackport_live());
+    CHECK(!Stackport_handle(msg("Adler/status", "{}")));
+    CHECK(!Stackport_handle(msg("stackport", "{}")));
+
+    CHECK(Stackport_handle(msg("stackport/sp-1/status",
+                               R"({"state":"online","reason":null,"observedAt":"2026-11-12T12:00:00.000Z","snapshotAt":"2026-11-12T12:00:00.000Z"})")));
+    CHECK(Stackport_link() == SpLink::Online && Stackport_live() && Stackport_instance() == "sp-1");
+    CHECK(Stackport_snapshotAt() == "2026-11-12T12:00:00.000Z" && Stackport_reason().empty());
+
+    CHECK(Stackport_handle(msg("stackport/sp-1/state/projects", R"([
+      {"id":2,"name":"api","group":"MW","state":"ready","containers":{"running":2,"total":2},"health":"healthy",
+       "lastCheckedAt":"x","traffic":{"windowS":300,"requests":120,"serverErrors":1,"errorRatePct":0.8,"p95Ms":210.5}},
+      {"id":3,"name":"web","group":null,"state":"down","containers":{"running":0,"total":1},"health":"none","traffic":null},
+      {"id":4,"name":"old","state":"paused","containers":{"running":0,"total":1}},
+      {"id":5,"name":"db","state":"problem","containers":{"running":1,"total":1},"health":"unhealthy",
+       "traffic":{"windowS":300,"requests":3,"serverErrors":3,"errorRatePct":100,"p95Ms":9000}},
+      {"id":0,"name":"bad","state":"ready"},
+      {"name":"noid","state":"ready"}])")));
+    const auto &projects = Stackport_projects();
+    CHECK(projects.size() == 4);
+    CHECK(projects[0].name == "web" && projects[1].name == "db" && projects[2].name == "old" && projects[3].name == "api");
+    CHECK(projects[3].running == 2 && projects[3].total == 2 && projects[3].requests == 120);
+    CHECK(projects[3].p95Ms > 210 && projects[3].p95Ms < 211 && projects[3].errorRatePct > 0.7f);
+    CHECK(projects[1].p95Ms < 0 && projects[1].errorRatePct < 0); // 3 requests: below the 20 the alert rules need
+    CHECK(projects[0].group.empty());
+    const SpSummary summary = Stackport_summary();
+    CHECK(summary.counted == 3 && summary.ready == 1 && summary.problem == 1 && summary.down == 1 && summary.paused == 1);
+
+    CHECK(Stackport_handle(msg("stackport/sp-1/state/alerts", R"([
+      {"id":"project_latency:2","severity":"warning","code":"project_latency","scope":"project","projectId":2,"subject":"api","message":"slow"},
+      {"id":"project_down:3","severity":"critical","code":"project_down","scope":"project","projectId":3,"subject":"web","message":"web is down"},
+      {"severity":"critical","code":"x"}])")));
+    CHECK(Stackport_alerts().size() == 2 && Stackport_alerts()[0].subject == "web" && Stackport_alerts()[1].subject == "api");
+
+    CHECK(Stackport_handle(msg("stackport/sp-1/state/actions",
+                               R"([{"id":"a1","kind":"deploy","projectId":2,"projectName":"api","startedAt":"x","progress":40},{"id":7,"kind":"restart","projectId":null,"projectName":null,"progress":null}])")));
+    CHECK(Stackport_actions().size() == 2 && Stackport_actions()[0].progress == 40 && Stackport_actions()[1].id == "7");
+    CHECK(Stackport_actions()[1].progress == -1);
+
+    CHECK(Stackport_handle(msg("stackport/sp-1/state/host",
+                               R"({"cpuPercent":12.5,"memPercent":61,"memUsedMb":4900,"memTotalMb":8000,"load1":0.4,"diskUsedPct":55,"netRxBps":1000,"netTxBps":2000,"sampledAt":"x"})")));
+    CHECK(Stackport_host().valid && Stackport_host().cpuPercent > 12.4f && Stackport_host().memTotalMb == 8000);
+    CHECK(Stackport_handle(msg("stackport/sp-1/state/host", "null")));
+    CHECK(!Stackport_host().valid);
+    CHECK(Stackport_hasData());
+
+    // A whole new section replaces the old one; an empty array is an empty section.
+    CHECK(Stackport_handle(msg("stackport/sp-1/state/alerts", "[]")));
+    CHECK(Stackport_alerts().empty());
+    // Malformed JSON keeps what was there.
+    const size_t before = Stackport_projects().size();
+    CHECK(Stackport_handle(msg("stackport/sp-1/state/projects", "{nope")));
+    CHECK(Stackport_projects().size() == before);
+
+    // The bridge going away (its Last Will), then coming back.
+    const uint32_t rev = Stackport_revision();
+    CHECK(Stackport_handle(msg("stackport/sp-1/status", R"({"state":"offline","reason":"bridge_disconnected"})")));
+    CHECK(Stackport_link() == SpLink::Offline && !Stackport_live() && Stackport_reason() == "bridge_disconnected");
+    CHECK(Stackport_revision() != rev);
+    CHECK(Stackport_projects().size() == before); // last known stays
+    const uint32_t rev2 = Stackport_revision();
+    CHECK(Stackport_handle(msg("stackport/sp-1/status", R"({"state":"offline","reason":"bridge_disconnected"})")));
+    CHECK(Stackport_revision() == rev2); // the same status again changes nothing
+    CHECK(Stackport_handle(msg("stackport/sp-1/status", R"({"state":"stale","reason":"stale_data"})")));
+    CHECK(Stackport_link() == SpLink::Stale);
+    CHECK(Stackport_handle(msg("stackport/sp-1/status", R"({"state":"connecting"})")));
+    CHECK(Stackport_link() == SpLink::Connecting);
+    CHECK(Stackport_handle(msg("stackport/sp-1/status", R"({"state":"something-new"})")));
+    CHECK(Stackport_link() == SpLink::Offline);
+    CHECK(Stackport_handle(msg("stackport/sp-1/status", "")));
+    CHECK(Stackport_link() == SpLink::None);
+
+    // Another instance is ignored once one is followed.
+    CHECK(Stackport_handle(msg("stackport/sp-2/status", R"({"state":"online"})")));
+    CHECK(Stackport_link() == SpLink::None && Stackport_instance() == "sp-1");
+    Stackport_reset();
+}
+
+// --- Stackport simulation ---------------------------------------------------------
+
+static void testStackportSim()
+{
+    Stackport_reset();
+    CHECK(!StackportSim_start("nonsense") && !StackportSim_active());
+    // The real instance is followed first; starting a simulation takes over from it.
+    Stackport_handle(msg("stackport/sp-real/status", R"({"state":"online"})"));
+    CHECK(StackportSim_start("all") && StackportSim_active());
+    CHECK(Stackport_instance() == "sim" && Stackport_live());
+    CHECK(Stackport_summary().down == 1 && Stackport_summary().problem == 1);
+    CHECK(Stackport_alerts().size() == 3 && Stackport_alerts()[0].severity == "critical");
+    CHECK(Stackport_host().valid && Stackport_actions().size() == 2 && Stackport_actions()[0].progress == 0);
+    // A real message while simulating is ignored.
+    Stackport_handle(msg("stackport/sp-real/status", R"({"state":"offline"})"));
+    CHECK(Stackport_live());
+
+    // The run goes all the way to the end, holds there, then is over.
+    uint32_t now = 1000;
+    int last = 0;
+    for (int i = 0; i < 40; ++i)
+    {
+        now += 400;
+        StackportSim_tick(now);
+        if (!Stackport_actions().empty())
+        {
+            CHECK(Stackport_actions()[0].progress >= last);
+            last = Stackport_actions()[0].progress;
+        }
+    }
+    CHECK(last == 100);
+    for (int i = 0; i < 6; ++i)
+    {
+        now += 400;
+        StackportSim_tick(now);
+    }
+    CHECK(Stackport_actions().empty());
+
+    CHECK(StackportSim_start("offline") && Stackport_link() == SpLink::Offline && Stackport_hasData());
+    CHECK(StackportSim_start("warn") && Stackport_alerts().size() == 2 && Stackport_summary().down == 0);
+    StackportSim_stop();
+    CHECK(!StackportSim_active() && !Stackport_hasData() && Stackport_instance().empty());
 }
 
 static void testRegistry()
@@ -800,14 +929,6 @@ static void testCalendar()
         review.status = "started";
         CHECK(Cal_taskGroup(review) == TaskGroup::Doing);
     }
-    CHECK(Cal_alerts().size() == 1 && Cal_alerts()[0]->title == "Down"); // "up" services are not alerts
-    CHECK(Cal_services().total == 2 && Cal_services().down == 1);
-
-    {
-        const auto attention = Cal_attention();
-        CHECK(attention.size() == 6 && attention[0]->title == "Down" && attention[1]->title == "Doing");
-    }
-
     // Standup is 17:00Z..17:30Z.
     CHECK(Cal_happening(t - 60) == nullptr);
     CHECK(Cal_happening(t + 60) && Cal_happening(t + 60)->title == "Standup");
@@ -964,6 +1085,8 @@ void testBattery()
 int main()
 {
     testRegistry();
+    testStackport();
+    testStackportSim();
     testMqttp();
     testManifest();
     testFacts();

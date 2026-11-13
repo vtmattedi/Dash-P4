@@ -22,6 +22,8 @@ int readInt(const char *key, int fallback)
     return atoi(text.c_str());
 }
 
+bool g_dirty = false;
+
 void store(const char *key, int value)
 {
     PersistentSettings.set(key, std::to_string(value));
@@ -39,21 +41,45 @@ void Prefs_load()
 
 const Prefs &Prefs_get() { return g_prefs; }
 
-void Prefs_setRestAfter(int seconds)
+void Prefs_setRestAfter(int seconds, bool save)
 {
     g_prefs.restAfterSec = clampInt(seconds, 0, 86400);
-    store("rest_after", g_prefs.restAfterSec);
+    g_dirty = true;
+    if (save)
+    {
+        Prefs_commit();
+    }
 }
 
-void Prefs_setBacklightActive(int level)
+void Prefs_setBacklightActive(int level, bool save)
 {
     g_prefs.blActive = clampInt(level, 8, 255);
-    store("bl_active", g_prefs.blActive);
+    g_dirty = true;
+    if (save)
+    {
+        Prefs_commit();
+    }
 }
 
-void Prefs_setBacklightRest(int level)
+void Prefs_setBacklightRest(int level, bool save)
 {
     g_prefs.blRest = clampInt(level, 0, 255);
+    g_dirty = true;
+    if (save)
+    {
+        Prefs_commit();
+    }
+}
+
+void Prefs_commit()
+{
+    if (!g_dirty)
+    {
+        return;
+    }
+    g_dirty = false;
+    store("rest_after", g_prefs.restAfterSec);
+    store("bl_active", g_prefs.blActive);
     store("bl_rest", g_prefs.blRest);
 }
 

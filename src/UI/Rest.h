@@ -14,6 +14,8 @@ bool Rest_active();
 /// Go to rest immediately, regardless of the timeout. The next touch wakes it.
 void Rest_now();
 void Rest_wake();
+/// Rest with the backlight off. The next touch brightens the screen (and is swallowed); it stays on the rest view.
+void Rest_screenOff();
 /// Rest now, and when a touch wakes it (and only a touch) run `afterTouchWake` once, on the LVGL task. Any other
 /// way out of rest (a critical notification, Rest_wake()) drops it.
 void Rest_nowThen(void (*afterTouchWake)());

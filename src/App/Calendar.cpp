@@ -315,51 +315,6 @@ std::vector<const FeedItem *> Cal_tasks(const std::string &source, int group)
     return out;
 }
 
-ServiceSummary Cal_services()
-{
-    sync();
-    ServiceSummary s;
-    for (const auto &pair : Feed_all())
-    {
-        const FeedItem &item = pair.second;
-        if (item.kind != "service")
-        {
-            continue;
-        }
-        ++s.total;
-        if (item.status == "down")
-        {
-            ++s.down;
-        }
-    }
-    return s;
-}
-
-std::vector<const FeedItem *> Cal_alerts()
-{
-    sync();
-    std::vector<const FeedItem *> out;
-    for (const auto &pair : Feed_all())
-    {
-        const FeedItem &item = pair.second;
-        if (item.kind == "service" && item.status == "down" && !Feed_isDismissed(item.numericId))
-        {
-            out.push_back(&item);
-        }
-    }
-    return out;
-}
-
-std::vector<const FeedItem *> Cal_attention()
-{
-    std::vector<const FeedItem *> out = Cal_alerts();
-    for (const FeedItem *item : Cal_todos())
-    {
-        out.push_back(item);
-    }
-    return out;
-}
-
 size_t Cal_count()
 {
     sync();

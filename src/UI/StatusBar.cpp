@@ -4,41 +4,17 @@
 #include <time.h>
 
 #include "App/Notifications.h"
-#include "Drawer.h"
 #include "StatusIcons.h"
 #include "Theme.h"
 
 namespace
 {
 constexpr uint32_t kMessageMs = 4000;
-constexpr int kDrawerSwipePx = 40;
 
 StatusIcons g_icons;
 lv_obj_t *g_clock;
 lv_obj_t *g_message;
 uint32_t g_messageUntil = 0; // lv_tick_get() deadline; 0 = none
-int32_t g_swipeStartX = 0;
-int32_t g_swipeStartY = 0;
-
-// Swipe down from the bar: the drawer.
-void onBarPress(lv_event_t *)
-{
-    lv_point_t p = {0, 0};
-    lv_indev_get_point(lv_indev_active(), &p);
-    g_swipeStartX = p.x;
-    g_swipeStartY = p.y;
-}
-
-void onBarRelease(lv_event_t *)
-{
-    lv_point_t p = {0, 0};
-    lv_indev_get_point(lv_indev_active(), &p);
-    // Only from the right, where the drawer hangs; a swipe on the clock or the middle does nothing.
-    if (g_swipeStartX >= Drawer_left() && p.y - g_swipeStartY >= kDrawerSwipePx)
-    {
-        Drawer_open();
-    }
-}
 } // namespace
 
 void Notify(NotifySeverity severity, const std::string &, const std::string &title, const std::string &body)
@@ -69,9 +45,6 @@ lv_obj_t *StatusBar_create(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
     Theme_plain(bar);
-    lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(bar, onBarPress, LV_EVENT_PRESSED, nullptr);
-    lv_obj_add_event_cb(bar, onBarRelease, LV_EVENT_RELEASED, nullptr);
     lv_obj_set_size(bar, BOARD_LCD_H_RES, UI_STATUSBAR_H);
     lv_obj_set_pos(bar, 0, 0);
     lv_obj_set_style_bg_color(bar, UI_COL_SURFACE, 0);

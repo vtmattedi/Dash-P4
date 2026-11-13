@@ -4,6 +4,7 @@
 #include <time.h>
 
 #include "App/Calendar.h"
+#include "App/Stackport.h"
 #include "App/Feed.h"
 #include "App/FeedSync.h"
 #include "App/Notifications.h"
@@ -178,19 +179,22 @@ void addCard(lv_obj_t *list, const FeedItem &item, int64_t now)
 
 void rebuild(int64_t now)
 {
-    // Stackport: only shown while something is down.
-    const auto alerts = Cal_alerts();
-    if (alerts.empty())
+    // Stackport: only shown while a project is down or unhealthy.
+    std::string names;
+    for (const SpProject &p : Stackport_projects())
+    {
+        if (p.state == "down" || p.state == "problem")
+        {
+            names += (names.empty() ? "" : ", ") + p.name;
+        }
+    }
+    if (names.empty())
     {
         lv_obj_add_flag(g_alert, LV_OBJ_FLAG_HIDDEN);
     }
     else
     {
-        std::string names = "Stackport down: ";
-        for (size_t i = 0; i < alerts.size(); ++i)
-        {
-            names += (i ? ", " : "") + (alerts[i]->title.empty() ? alerts[i]->id : alerts[i]->title);
-        }
+        names = (Stackport_live() ? "Stackport down: " : "Stackport down (last known): ") + names;
         Theme_setText(g_alertText, names.c_str());
         lv_obj_remove_flag(g_alert, LV_OBJ_FLAG_HIDDEN);
     }
@@ -310,7 +314,7 @@ lv_obj_t *PageTasks_create(lv_obj_t *parent)
 void PageTasks_refresh(bool force)
 {
     const int64_t now = static_cast<int64_t>(time(nullptr));
-    const uint32_t revision = Cal_revision();
+    const uint32_t revision = Cal_revision() + Stackport_revision(); // both only ever grow, so the sum changes with either
     const int64_t minute = now / 60;
     if (!force && !g_dirty && revision == g_builtRevision && minute == g_builtMinute)
     {

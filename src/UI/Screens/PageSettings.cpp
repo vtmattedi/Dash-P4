@@ -61,7 +61,7 @@ void percent(char *buf, size_t n, int level) { snprintf(buf, n, "%d%%", level * 
 void onBacklight(lv_event_t *e)
 {
     const int level = lv_slider_get_value(lv_event_get_target_obj(e));
-    Prefs_setBacklightActive(level);
+    Prefs_setBacklightActive(level, false);
     if (!Rest_active())
     {
         board_set_backlight(static_cast<uint8_t>(level));
@@ -74,7 +74,7 @@ void onBacklight(lv_event_t *e)
 void onRestBacklight(lv_event_t *e)
 {
     const int level = lv_slider_get_value(lv_event_get_target_obj(e));
-    Prefs_setBacklightRest(level);
+    Prefs_setBacklightRest(level, false);
     char buf[16];
     percent(buf, sizeof(buf), level);
     Theme_setText(g_restBacklightValue, buf);
@@ -101,7 +101,7 @@ void restAfterText(char *buf, size_t n, int seconds)
 void onRestAfter(lv_event_t *e)
 {
     const int index = lv_slider_get_value(lv_event_get_target_obj(e));
-    Prefs_setRestAfter(kRestSteps[index]);
+    Prefs_setRestAfter(kRestSteps[index], false);
     char buf[16];
     restAfterText(buf, sizeof(buf), kRestSteps[index]);
     Theme_setText(g_restAfterValue, buf);
@@ -119,6 +119,7 @@ lv_obj_t *sliderRow(lv_obj_t *card, const char *label, int min, int max, int val
     lv_obj_set_height(slider, 18);
     lv_obj_set_ext_click_area(slider, 22);
     lv_obj_add_event_cb(slider, cb, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(slider, [](lv_event_t *) { Prefs_commit(); }, LV_EVENT_RELEASED, nullptr); // saved once, on release
     *valueLabel = Theme_label(row, "", UI_FONT_M, UI_COL_TEXT);
     lv_obj_set_width(*valueLabel, 90);
     lv_obj_set_style_text_align(*valueLabel, LV_TEXT_ALIGN_RIGHT, 0);

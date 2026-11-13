@@ -12,7 +12,6 @@
 //                 all-day event, bare dates ("2026-11-10"). ends_at is EXCLUSIVE, like Google's.
 //   kind "task"   from source "woi": due_at, an instant or a date; a WOI task with no due date is not shown.
 //                 from source "linear": not on the calendar, it is a todo (Cal_todos).
-//   kind "service" (stackport): an alert while status is "down" (Cal_alerts), never on the calendar.
 //
 // An entry is placed on LOCAL days (the panel's timezone), so an evening event never lands on tomorrow. All-day
 // events cover whole local days; a due task is a point in time.
@@ -74,19 +73,6 @@ const char *Cal_taskGroupName(TaskGroup group); // "To do", "Doing", "Review"
 /// The Tasks page's list: Cal_todos() narrowed to one source ("linear", "woi"; empty = any) and one group
 /// (-1 = any, else a TaskGroup value). Same order as Cal_todos().
 std::vector<const FeedItem *> Cal_tasks(const std::string &source, int group);
-
-/// How many services the feed knows about and how many of them are down (Stackport watcher).
-struct ServiceSummary
-{
-    size_t total = 0, down = 0;
-};
-ServiceSummary Cal_services();
-
-/// Type 2, Stackport watcher: services whose status is "down", not dismissed.
-std::vector<const FeedItem *> Cal_alerts();
-
-/// What wants attention outside the calendar, in the order to show it: down services, then Linear todos.
-std::vector<const FeedItem *> Cal_attention();
 
 /// Total entries on the calendar (dismissed Due entries included).
 size_t Cal_count();

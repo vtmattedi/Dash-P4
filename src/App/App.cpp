@@ -26,6 +26,8 @@
 #include "Net.h"
 #include "Ota.h"
 #include "Prefs.h"
+#include "Stackport.h"
+#include "StackportSim.h"
 #include "Registry.h"
 #include "Explorer/Ping.h"
 #include "Explorer/TopicTap.h"
@@ -42,7 +44,7 @@ uint32_t nowMs() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 void onMessage(const NetMessage &message)
 {
     Tap_record(message); // the raw tail sees everything, including what Mqttp consumes
-    if (Mqttp_handleMessage(message))
+    if (Mqttp_handleMessage(message) || Stackport_handle(message))
     {
         return;
     }
@@ -294,6 +296,39 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
         return answer(true, line);
     }
 
+    if (message.command == "SPSIM")
+    {
+        // SPSIM <down|warn|run|all|offline|OFF>: show the rest screen what Stackport would look like (App/StackportSim.h).
+        // OFF forgets it and fetches the real retained state again.
+        if (!board_lvgl_lock(500))
+        {
+            return answer(false, "UI busy, try again");
+        }
+        std::string what = message.subcommand;
+        for (char &c : what)
+        {
+            c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        }
+        bool ok = true;
+        if (what == "off")
+        {
+            StackportSim_stop();
+            Net_unsubscribe(kStackportStatusFilter);
+            Net_unsubscribe(kStackportStateFilter);
+            Net_subscribe(kStackportStatusFilter);
+            Net_subscribe(kStackportStateFilter);
+#ifdef STACKPORT_BOOT_SIM
+    StackportSim_start(STACKPORT_BOOT_SIM, true); // a build with -DSTACKPORT_BOOT_SIM=\"all\" shows the fake Stackport from boot
+#endif
+        }
+        else
+        {
+            ok = StackportSim_start(what.c_str());
+        }
+        board_lvgl_unlock();
+        return answer(ok, ok ? (what == "off" ? "simulation off, real state requested" : "simulating") : "SPSIM down|warn|run|all|offline|off");
+    }
+
     if (message.command == "PERF")
     {
         // PERF [ON|OFF]: LVGL's own FPS / CPU / render-time readout (bottom right); also Settings > Display > Show FPS.
@@ -340,7 +375,7 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
         return answer(true, line);
     }
 
-    return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, FEED, LINK, PERF, TARGET, C6OTA]. "
+    return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, FEED, LINK, PERF, SPSIM, TARGET, C6OTA]. "
                          "Framework built-ins and `>` resource commands still apply.");
 }
 
@@ -393,6 +428,7 @@ static void housekeepingTimer(lv_timer_t *)
     static uint32_t lastMirrorMs = 0;
 
     Mqttp_tick();
+    StackportSim_tick(nowMs());
     Ping_tick();
     Battery_sample();
     SysMon_sample();
@@ -458,6 +494,9 @@ void App_begin()
     Net_onMessage(onMessage);
     Registry_onValue(onValue);
     Net_begin();
+    // The Stackport tracker: the bridge's retained status and state sections (App/Stackport.h).
+    Net_subscribe(kStackportStatusFilter);
+    Net_subscribe(kStackportStateFilter);
 
     // 20 ms: fast enough that a tap on a live value feels live, slow enough that a
     // retained-state replay (hundreds of messages) is spread over many frames.

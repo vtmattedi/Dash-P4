@@ -15,6 +15,8 @@ void StatusIcons_create(StatusIcons &icons, lv_obj_t *parent, int32_t height)
 {
     icons.row = Theme_row(parent, LV_SIZE_CONTENT, height);
     lv_obj_set_style_pad_gap(icons.row, 20, 0);
+    // Not touch targets: a press on the icons belongs to whatever holds the row (the status bar's drawer swipe).
+    lv_obj_remove_flag(icons.row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_flex_align(icons.row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     // Memory monitor first, small and dim.
     icons.ram = Theme_label(icons.row, "RAM --", UI_FONT_S, UI_COL_TEXT_DIM);
@@ -28,6 +30,7 @@ void StatusIcons_create(StatusIcons &icons, lv_obj_t *parent, int32_t height)
     // Battery: symbol, percentage, and a bolt while charging. Hidden until a battery is seen.
     icons.battery = Theme_row(icons.row, LV_SIZE_CONTENT, height);
     lv_obj_set_style_pad_gap(icons.battery, 6, 0);
+    lv_obj_remove_flag(icons.battery, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_flex_align(icons.battery, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     icons.bolt = Theme_label(icons.battery, LV_SYMBOL_CHARGE, UI_FONT_M, UI_COL_OK);
     lv_obj_t *symbol = Theme_label(icons.battery, LV_SYMBOL_BATTERY_FULL, UI_FONT_L, UI_COL_TEXT_DIM);

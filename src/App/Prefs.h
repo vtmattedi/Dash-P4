@@ -17,9 +17,13 @@ struct Prefs
 void Prefs_load();
 const Prefs &Prefs_get();
 
-void Prefs_setRestAfter(int seconds);
-void Prefs_setBacklightActive(int level);
-void Prefs_setBacklightRest(int level);
+// The setters take effect at once. With save = false they stay in memory only: a slider calls them on every step (a flash write
+// per step stalled the whole UI) and Prefs_commit() on release writes what changed.
+void Prefs_setRestAfter(int seconds, bool save = true);
+void Prefs_setBacklightActive(int level, bool save = true);
+void Prefs_setBacklightRest(int level, bool save = true);
+/// Write whatever was set with save = false.
+void Prefs_commit();
 
 /// Bumped on every change.
 uint32_t Prefs_revision();

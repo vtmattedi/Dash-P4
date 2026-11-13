@@ -3,7 +3,6 @@
 #include <stdio.h>
 
 #include "App/AcClient.h"
-#include "App/FeedSync.h"
 #include "App/LightControl.h"
 #include "App/Notifications.h"
 #include "App/Prefs.h"
@@ -19,6 +18,9 @@ constexpr int kPanelH = 398;
 constexpr int kTileW = 168;
 constexpr int kTileH = 120;
 constexpr int kSwipeUpPx = 50;
+constexpr int kZoneH = 90;        // the strip at the top right where a downward drag picks the drawer up
+constexpr int kDragStartPx = 14;  // movement before it counts as a drag and not a tap
+constexpr int kOpenFraction = 35; // percent of the panel that must be out for release to open it
 
 struct Tile
 {
@@ -27,12 +29,17 @@ struct Tile
     lv_obj_t *caption = nullptr;
 };
 
+lv_indev_t *g_indev;
+lv_timer_t *g_dragTimer;
+bool g_tracking = false;
+bool g_dragging = false;
+lv_point_t g_dragStart = {0, 0};
 lv_obj_t *g_scrim;
 lv_obj_t *g_panel;
 lv_obj_t *g_slider;
 lv_obj_t *g_sliderValue;
 lv_timer_t *g_timer;
-Tile g_light, g_ac;
+Tile g_light, g_ac, g_rest, g_screenOff;
 bool g_open = false;
 int32_t g_pressY = 0;
 
@@ -103,29 +110,45 @@ void onAc(lv_event_t *)
     refresh();
 }
 
+// On the rest screen this tile is the way out of it.
 void onRest(lv_event_t *)
 {
     Drawer_close();
-    Rest_now();
+    if (Rest_active())
+    {
+        Rest_wake();
+    }
+    else
+    {
+        Rest_now();
+    }
 }
 
-void onSync(lv_event_t *)
+void onScreenOff(lv_event_t *)
 {
-    FeedSync_pollNow();
-    Notify(NotifySeverity::Info, "drawer", "Syncing the feed");
     Drawer_close();
+    Rest_screenOff();
 }
 
 void onSettings(lv_event_t *)
 {
     Drawer_close();
+    Rest_wake();
     Ui_show(UI_PAGE_SETTINGS);
 }
 
+// On the rest screen the slider is the resting brightness; elsewhere the normal one. Applied live, saved on release.
 void onBrightness(lv_event_t *e)
 {
     const int level = lv_slider_get_value(lv_event_get_target_obj(e));
-    Prefs_setBacklightActive(level);
+    if (Rest_active())
+    {
+        Prefs_setBacklightRest(level, false);
+    }
+    else
+    {
+        Prefs_setBacklightActive(level, false);
+    }
     board_set_backlight(static_cast<uint8_t>(level));
     char buf[8];
     snprintf(buf, sizeof(buf), "%d%%", level * 100 / 255);
@@ -175,6 +198,102 @@ void finishClose(lv_anim_t *)
     lv_obj_add_flag(g_scrim, LV_OBJ_FLAG_HIDDEN);
     lv_timer_pause(g_timer);
 }
+
+// Make the panel ready to be seen: slider and tiles current, scrim up, refresh timer running.
+void prepare()
+{
+    // Above the rest screen too (it is created later, on the same layer).
+    lv_obj_move_foreground(g_scrim);
+    const bool resting = Rest_active();
+    const int level = resting ? Prefs_get().blRest : Prefs_get().blActive;
+    lv_slider_set_range(g_slider, resting ? 0 : 8, 255);
+    lv_slider_set_value(g_slider, level, LV_ANIM_OFF);
+    Theme_setText(g_rest.caption, resting ? "Wake" : "Rest");
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d%%", level * 100 / 255);
+    Theme_setText(g_sliderValue, buf);
+    refresh();
+    lv_obj_remove_flag(g_scrim, LV_OBJ_FLAG_HIDDEN);
+    lv_timer_resume(g_timer);
+}
+
+void endDrag()
+{
+    if (!g_tracking)
+    {
+        return;
+    }
+    g_tracking = false;
+    lv_timer_pause(g_dragTimer);
+    if (!g_dragging)
+    {
+        return;
+    }
+    g_dragging = false;
+    const int shown = lv_obj_get_y(g_panel) + kPanelH; // 0 hidden .. kPanelH fully out
+    if (shown * 100 >= kPanelH * kOpenFraction)
+    {
+        g_open = true;
+        slideTo(0, nullptr);
+    }
+    else
+    {
+        g_open = false;
+        slideTo(-kPanelH, finishClose);
+    }
+}
+
+// Follows the finger while a drag that started in the zone is going on; also notices the release, which LVGL does not
+// report once the press has been taken away from the object under it.
+void onDragTick(lv_timer_t *)
+{
+    if (lv_indev_get_state(g_indev) != LV_INDEV_STATE_PRESSED)
+    {
+        endDrag();
+        return;
+    }
+    lv_point_t p = {0, 0};
+    lv_indev_get_point(g_indev, &p);
+    const int dy = p.y - g_dragStart.y;
+    const int dx = p.x - g_dragStart.x;
+    if (!g_dragging)
+    {
+        if (dy < kDragStartPx || dy < (dx < 0 ? -dx : dx))
+        {
+            return;
+        }
+        g_dragging = true;
+        lv_indev_wait_release(g_indev); // the press is the drawer's now: no click on whatever is under the finger
+        lv_anim_delete(g_panel, nullptr);
+        prepare();
+    }
+    int y = -kPanelH + dy;
+    y = y < -kPanelH ? -kPanelH : (y > 0 ? 0 : y);
+    lv_obj_set_y(g_panel, y);
+}
+
+void onIndev(lv_event_t *e)
+{
+    const lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_RELEASED)
+    {
+        endDrag();
+        return;
+    }
+    if (g_open)
+    {
+        return;
+    }
+    lv_point_t p = {0, 0};
+    lv_indev_get_point(g_indev, &p);
+    if (p.x >= BOARD_LCD_H_RES - kPanelW && p.y < kZoneH)
+    {
+        g_tracking = true;
+        g_dragging = false;
+        g_dragStart = p;
+        lv_timer_resume(g_dragTimer);
+    }
+}
 } // namespace
 
 void Drawer_create()
@@ -210,8 +329,8 @@ void Drawer_create()
     lv_obj_set_style_pad_gap(tiles, 14, 0);
     g_light = makeTile(tiles, UI_ICON_BULB, "Light", onLight);
     g_ac = makeTile(tiles, UI_ICON_SNOWFLAKE, "AC", onAc);
-    makeTile(tiles, LV_SYMBOL_POWER, "Rest", onRest);
-    makeTile(tiles, LV_SYMBOL_REFRESH, "Sync feed", onSync);
+    g_rest = makeTile(tiles, LV_SYMBOL_POWER, "Rest", onRest);
+    g_screenOff = makeTile(tiles, LV_SYMBOL_EYE_CLOSE, "Screen off", onScreenOff);
     makeTile(tiles, LV_SYMBOL_SETTINGS, "Settings", onSettings);
 
     lv_obj_t *row = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, 48);
@@ -226,10 +345,21 @@ void Drawer_create()
     lv_obj_set_style_bg_color(g_slider, UI_COL_ACCENT, LV_PART_KNOB);
     lv_obj_set_style_pad_all(g_slider, 8, LV_PART_KNOB);
     lv_obj_add_event_cb(g_slider, onBrightness, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(g_slider, [](lv_event_t *) { Prefs_commit(); }, LV_EVENT_RELEASED, nullptr);
     g_sliderValue = Theme_label(row, "", UI_FONT_M, UI_COL_TEXT);
 
     g_timer = lv_timer_create([](lv_timer_t *) { refresh(); }, 400, nullptr);
     lv_timer_pause(g_timer);
+
+    // The pickup zone: any press in the top-right strip, whatever is drawn there, may turn into a downward drag.
+    g_indev = lv_indev_get_next(nullptr);
+    g_dragTimer = lv_timer_create(onDragTick, 16, nullptr);
+    lv_timer_pause(g_dragTimer);
+    if (g_indev != nullptr)
+    {
+        lv_indev_add_event_cb(g_indev, onIndev, LV_EVENT_PRESSED, nullptr);
+        lv_indev_add_event_cb(g_indev, onIndev, LV_EVENT_RELEASED, nullptr);
+    }
 }
 
 void Drawer_open()
@@ -239,14 +369,7 @@ void Drawer_open()
         return;
     }
     g_open = true;
-    const int level = Prefs_get().blActive;
-    lv_slider_set_value(g_slider, level, LV_ANIM_OFF);
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d%%", level * 100 / 255);
-    Theme_setText(g_sliderValue, buf);
-    refresh();
-    lv_obj_remove_flag(g_scrim, LV_OBJ_FLAG_HIDDEN);
-    lv_timer_resume(g_timer);
+    prepare();
     slideTo(0, nullptr);
 }
 
@@ -263,9 +386,4 @@ void Drawer_close()
 bool Drawer_isOpen()
 {
     return g_open;
-}
-
-int Drawer_left()
-{
-    return BOARD_LCD_H_RES - kPanelW;
 }
