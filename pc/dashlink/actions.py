@@ -12,6 +12,7 @@ from .browsers import BROWSERS, open_in_browser
 
 MAX_URL = 2048
 MEDIA_COMMANDS = ("play_pause", "next", "prev", "stop")
+MIC_MODES = ("mute", "unmute", "toggle")
 
 
 def validate_url(url: object, allow_hosts: Iterable[str] | None = None) -> str:
@@ -36,17 +37,21 @@ def validate_url(url: object, allow_hosts: Iterable[str] | None = None) -> str:
 
 
 class ActionRunner:
-    """Runs the named actions. `media` is a media provider (or None); `opener` and `clock` can be replaced in tests."""
+    """Runs the named actions. `media` and `display` are providers (or None); `opener` and `clock` can be replaced in tests."""
 
     def __init__(
         self,
         media=None,
+        display=None,
+        call=None,
         allow_hosts: Iterable[str] | None = None,
         opener: Callable[[str, str], object] = open_in_browser,
         clock: Callable[[], float] = time.monotonic,
         url_limit: tuple[int, float] = (5, 60.0),
     ) -> None:
         self.media = media
+        self.display = display
+        self.call = call
         self.allow_hosts = list(allow_hosts or [])
         self.opener = opener
         self.clock = clock
@@ -57,6 +62,13 @@ class ActionRunner:
         caps = ["open_url"]
         if self.media is not None:
             caps.append("media")
+        if self.call is not None:
+            caps.append("call")
+            caps.append("mic")
+        if self.display is not None:
+            caps.append("wake_display")
+            caps.append("sleep_display")
+            caps.append("sleep_pc")
         return caps
 
     async def run(self, name: object, args: object) -> tuple[bool, str]:
@@ -66,6 +78,14 @@ class ActionRunner:
                 return self._open_url(args)
             if name == "media":
                 return await self._media(args)
+            if name == "mic":
+                return await self._mic(args)
+            if name == "wake_display":
+                return await self._wake_display()
+            if name == "sleep_display":
+                return await self._sleep_display()
+            if name == "sleep_pc":
+                return await self._sleep_pc()
         except ValueError as error:
             return False, str(error)
         return False, "unknown action"
@@ -92,3 +112,30 @@ class ActionRunner:
             return False, "no media control on this PC"
         done = await self.media.control(command)
         return (True, "") if done else (False, "nothing is playing")
+
+    async def _mic(self, args: dict) -> tuple[bool, str]:
+        mode = args.get("mode")
+        if mode not in MIC_MODES:
+            raise ValueError("unknown microphone mode")
+        if self.call is None:
+            return False, "no microphone control on this PC"
+        done = await self.call.mic(mode)
+        return (True, "") if done else (False, "could not change the microphone")
+
+    async def _wake_display(self) -> tuple[bool, str]:
+        if self.display is None:
+            return False, "no display control on this PC"
+        done = await self.display.wake()
+        return (True, "") if done else (False, "could not wake the monitor")
+
+    async def _sleep_display(self) -> tuple[bool, str]:
+        if self.display is None:
+            return False, "no display control on this PC"
+        done = await self.display.sleep()
+        return (True, "") if done else (False, "could not turn the monitor off")
+
+    async def _sleep_pc(self) -> tuple[bool, str]:
+        if self.display is None:
+            return False, "no power control on this PC"
+        done = await self.display.suspend()
+        return (True, "") if done else (False, "could not put the PC to sleep")

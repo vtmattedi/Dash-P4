@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import logging
 import secrets
 
 from . import protocol
+from .firmware import FirmwareError, parse_image
 
 log = logging.getLogger("fakepanel")
 
@@ -26,6 +28,11 @@ class FakePanel:
         self.hello: dict = {}
         self.pings = 0
         self.rejected = 0
+        self.elf = "00" * 32             # the running build's identity, sent in the challenge
+        self.refuse_update = ""          # set to a reason to make the panel refuse a firmware push
+        self.update_boots = True         # False: the new image "fails to start" and the old build is back after the restart
+        self.updates: list[bytes] = []   # every image fully received
+        self._update: dict | None = None
         self.connected = asyncio.Event()
         self._server: asyncio.base_events.Server | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -54,10 +61,48 @@ class FakePanel:
         await self._writer.drain()
         return action_id
 
+    # ---- firmware push (what the real panel does for U and D frames)
+
+    async def _status(self, writer: asyncio.StreamWriter, state: str, msg: str = "", pct: int = 0) -> None:
+        writer.write(protocol.encode(protocol.STATUS, {"state": state, "pct": pct, "msg": msg}))
+        await writer.drain()
+
+    async def _begin_update(self, writer: asyncio.StreamWriter, body: dict) -> bool:
+        self._update = None
+        if self.refuse_update or body.get("target") not in ("p4", "c6") or not isinstance(body.get("size"), int) or body["size"] <= 0:
+            await self._status(writer, "failed", self.refuse_update or "bad update request")
+            return False
+        self._update = {"target": body["target"], "size": body["size"], "sha256": str(body.get("sha256", "")), "buffer": bytearray()}
+        await self._status(writer, "ready")
+        return False
+
+    async def _receive_data(self, writer: asyncio.StreamWriter, data: bytes) -> bool:
+        """Returns True when the update finished and the panel 'restarts'."""
+        update = self._update
+        if update is None:
+            await self._status(writer, "failed", "no update in progress")
+            return False
+        update["buffer"] += data
+        if len(update["buffer"]) < update["size"]:
+            return False
+        self._update = None
+        image = bytes(update["buffer"])
+        if len(image) != update["size"] or hashlib.sha256(image).hexdigest() != update["sha256"]:
+            await self._status(writer, "failed", "checksum mismatch")
+            return False
+        self.updates.append(image)
+        await self._status(writer, "done", pct=100)
+        if self.update_boots:
+            try:
+                self.elf = parse_image(image, update["target"]).elf_sha256 or self.elf
+            except FirmwareError:
+                pass
+        return True
+
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         nonce = secrets.token_hex(16)
         try:
-            writer.write(protocol.encode(protocol.CHALLENGE, {"v": protocol.VERSION, "nonce": nonce, "device": self.device, "fw": self.fw}))
+            writer.write(protocol.encode(protocol.CHALLENGE, {"v": protocol.VERSION, "nonce": nonce, "device": self.device, "fw": self.fw, "elf": self.elf}))
             kind, hello = await asyncio.wait_for(protocol.read_frame(reader), 5)
             if kind != protocol.HELLO or not protocol.verify_proof(self.token, nonce, str(hello.get("name", "")), hello.get("auth", "")):
                 self.rejected += 1
@@ -78,6 +123,12 @@ class FakePanel:
                 elif kind == protocol.RESULT:
                     self.results.append(body)
                     log.info("result %s", body)
+                elif kind == protocol.UPDATE:
+                    if await self._begin_update(writer, body):
+                        break
+                elif kind == protocol.DATA:
+                    if await self._receive_data(writer, body["data"]):
+                        break  # the update is done: the "panel" restarts, so the link ends
                 elif kind == protocol.PING:
                     self.pings += 1
                     writer.write(protocol.encode(protocol.PONG, {"t": body.get("t", 0)}))

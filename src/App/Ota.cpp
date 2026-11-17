@@ -1,9 +1,12 @@
 #include "Ota.h"
 
+#include <algorithm>
 #include <atomic>
 #include <string.h>
 
+#include "esp_app_desc.h"
 #include "esp_app_format.h"
+#include "mbedtls/md.h"
 #include "esp_crt_bundle.h"
 #include "esp_hosted.h"
 #include "esp_http_client.h"
@@ -238,6 +241,264 @@ bool startTask(const std::string &url, bool coprocessor)
     return true;
 }
 } // namespace
+
+// ------------------------------------------------------------------------------------------------------------- push
+
+namespace
+{
+struct Push
+{
+    bool active = false;
+    bool coprocessor = false;
+    bool coprocessorStarted = false; // esp_hosted_slave_ota_begin() was called
+    uint32_t size = 0;
+    uint32_t received = 0;
+    uint8_t expect[32] = {};
+    mbedtls_md_context_t sha;
+    bool shaReady = false;
+    esp_ota_handle_t handle = 0;
+    const esp_partition_t *partition = nullptr;
+};
+Push g_push;
+
+bool parseHex32(const std::string &hex, uint8_t out[32])
+{
+    if (hex.size() != 64)
+    {
+        return false;
+    }
+    for (int i = 0; i < 32; ++i)
+    {
+        unsigned value = 0;
+        for (int j = 0; j < 2; ++j)
+        {
+            const char c = hex[i * 2 + j];
+            unsigned digit;
+            if (c >= '0' && c <= '9')
+                digit = c - '0';
+            else if (c >= 'a' && c <= 'f')
+                digit = 10 + c - 'a';
+            else if (c >= 'A' && c <= 'F')
+                digit = 10 + c - 'A';
+            else
+                return false;
+            value = value * 16 + digit;
+        }
+        out[i] = static_cast<uint8_t>(value);
+    }
+    return true;
+}
+
+void releasePush()
+{
+    if (g_push.shaReady)
+    {
+        mbedtls_md_free(&g_push.sha);
+    }
+    g_push = Push();
+}
+
+bool pushFail(const std::string &text, std::string &why)
+{
+    why = text;
+    Ota_pushAbort(text.c_str());
+    return false;
+}
+} // namespace
+
+bool Ota_pushBegin(bool coprocessor, uint32_t size, const std::string &sha256Hex, std::string &why)
+{
+    if (g_state == OtaState::Running || g_push.active)
+    {
+        why = "an update is already running";
+        return false;
+    }
+    Push next;
+    if (size < 4096 || !parseHex32(sha256Hex, next.expect))
+    {
+        why = "bad update request";
+        return false;
+    }
+    if (!coprocessor)
+    {
+        next.partition = esp_ota_get_next_update_partition(nullptr);
+        if (!next.partition || size > next.partition->size)
+        {
+            why = next.partition ? "the image does not fit the update slot" : "no update slot";
+            return false;
+        }
+        const esp_err_t err = esp_ota_begin(next.partition, OTA_WITH_SEQUENTIAL_WRITES, &next.handle);
+        if (err != ESP_OK)
+        {
+            why = std::string("cannot start: ") + esp_err_to_name(err);
+            return false;
+        }
+    }
+    mbedtls_md_init(&next.sha);
+    if (mbedtls_md_setup(&next.sha, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0) != 0 ||
+        mbedtls_md_starts(&next.sha) != 0)
+    {
+        mbedtls_md_free(&next.sha);
+        if (!coprocessor)
+        {
+            esp_ota_abort(next.handle);
+        }
+        why = "no hash engine";
+        return false;
+    }
+    next.shaReady = true;
+    next.coprocessor = coprocessor;
+    next.size = size;
+    next.active = true;
+    g_push = next;
+    g_coprocessor = coprocessor;
+    g_percent = 0;
+    setMessage(coprocessor ? "Receiving the C6 firmware..." : "Receiving the firmware...");
+    g_state = OtaState::Running;
+    ESP_LOGI(TAG, "push begun: %s, %u bytes", coprocessor ? "C6" : "P4", static_cast<unsigned>(size));
+    return true;
+}
+
+bool Ota_pushWrite(const uint8_t *data, size_t length, std::string &why)
+{
+    if (!g_push.active)
+    {
+        why = "no update in progress";
+        return false;
+    }
+    if (length == 0 || g_push.received + length > g_push.size)
+    {
+        return pushFail("more data than announced", why);
+    }
+    if (g_push.coprocessor)
+    {
+        if (!g_push.coprocessorStarted)
+        {
+            std::string reason;
+            if (!isCoprocessorImage(data, static_cast<int>(length), reason))
+            {
+                return pushFail(reason, why);
+            }
+            const esp_err_t err = esp_hosted_slave_ota_begin();
+            if (err != ESP_OK)
+            {
+                return pushFail(std::string("the C6 refused to start an update: ") + esp_err_to_name(err), why);
+            }
+            g_push.coprocessorStarted = true;
+        }
+        for (size_t offset = 0; offset < length; offset += kCoprocessorChunk)
+        {
+            const size_t n = std::min<size_t>(kCoprocessorChunk, length - offset);
+            const esp_err_t err = esp_hosted_slave_ota_write(const_cast<uint8_t *>(data) + offset, static_cast<uint32_t>(n));
+            if (err != ESP_OK)
+            {
+                return pushFail(std::string("writing to the C6 failed: ") + esp_err_to_name(err), why);
+            }
+        }
+    }
+    else
+    {
+        const esp_err_t err = esp_ota_write(g_push.handle, data, length);
+        if (err != ESP_OK)
+        {
+            return pushFail(std::string("flash write failed: ") + esp_err_to_name(err), why);
+        }
+    }
+    mbedtls_md_update(&g_push.sha, data, length);
+    g_push.received += static_cast<uint32_t>(length);
+    g_percent = static_cast<int>(static_cast<uint64_t>(g_push.received) * 100 / g_push.size);
+    return true;
+}
+
+bool Ota_pushEnd(std::string &why)
+{
+    if (!g_push.active || g_push.received != g_push.size)
+    {
+        return pushFail("the image is incomplete", why);
+    }
+    uint8_t digest[32];
+    mbedtls_md_finish(&g_push.sha, digest);
+    if (memcmp(digest, g_push.expect, sizeof(digest)) != 0)
+    {
+        return pushFail("the image does not match its checksum", why);
+    }
+    setMessage("Checking the image...");
+    if (g_push.coprocessor)
+    {
+        const esp_err_t err = esp_hosted_slave_ota_end(); // the C6 validates the image
+        if (err != ESP_OK)
+        {
+            g_push.coprocessorStarted = false; // already ended
+            return pushFail(std::string("the C6 rejected the image: ") + esp_err_to_name(err), why);
+        }
+    }
+    else
+    {
+        esp_err_t err = esp_ota_end(g_push.handle); // validates the image
+        g_push.handle = 0;
+        if (err == ESP_OK)
+        {
+            err = esp_ota_set_boot_partition(g_push.partition);
+        }
+        if (err != ESP_OK)
+        {
+            return pushFail(std::string("the image was rejected: ") + esp_err_to_name(err), why);
+        }
+    }
+    const bool coprocessor = g_push.coprocessor;
+    releasePush();
+    g_coprocessor = coprocessor;
+    g_percent = 100;
+    setMessage(coprocessor ? "C6 firmware written. Restarting." : "Update written. Restarting.");
+    g_state = OtaState::Done;
+    ESP_LOGI(TAG, "push complete");
+    return true;
+}
+
+void Ota_pushAbort(const char *why)
+{
+    if (!g_push.active)
+    {
+        return;
+    }
+    if (g_push.coprocessor)
+    {
+        if (g_push.coprocessorStarted)
+        {
+            esp_hosted_slave_ota_end();
+        }
+    }
+    else if (g_push.handle)
+    {
+        esp_ota_abort(g_push.handle);
+    }
+    releasePush();
+    setMessage(why && *why ? why : "The update was cancelled.");
+    g_state = OtaState::Failed;
+    ESP_LOGW(TAG, "push aborted: %s", g_message.c_str());
+}
+
+bool Ota_pushActive() { return g_push.active; }
+uint32_t Ota_pushReceived() { return g_push.received; }
+uint32_t Ota_pushSize() { return g_push.size; }
+
+void Ota_pushRestart()
+{
+    if (g_coprocessor)
+    {
+        Ota_restartAfterCoprocessor();
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+}
+
+std::string Ota_runningBuildId()
+{
+    char text[65] = {};
+    esp_app_get_elf_sha256(text, sizeof(text));
+    return text;
+}
 
 bool Ota_start(const std::string &url) { return startTask(url, false); }
 

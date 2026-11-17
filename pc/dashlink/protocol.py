@@ -21,6 +21,18 @@ PONG = b"O"
 STATE = b"S"
 ACTION = b"A"
 RESULT = b"R"
+UPDATE = b"U"  # PC -> panel: a firmware image follows (see PROTOCOL.md, "Firmware push")
+DATA = b"D"    # PC -> panel: raw bytes of that image (the payload is not JSON)
+STATUS = b"T"  # panel -> PC: how the update is going
+
+MAX_CHUNK = MAX_FRAME - 1  # the most bytes one DATA frame carries
+
+
+def encode_data(chunk: bytes) -> bytes:
+    """A DATA frame: the payload is the raw bytes, not JSON."""
+    if not 0 < len(chunk) <= MAX_CHUNK:
+        raise ProtocolError(f"a data chunk is 1..{MAX_CHUNK} bytes, got {len(chunk)}")
+    return struct.pack("<I", len(chunk) + 1) + DATA + chunk
 
 
 class ProtocolError(Exception):
@@ -48,6 +60,8 @@ async def read_frame(reader: asyncio.StreamReader) -> tuple[bytes, dict]:
     kind, rest = data[:1], data[1:]
     if not rest:
         return kind, {}
+    if kind == DATA:
+        return kind, {"data": rest}
     try:
         body = json.loads(rest.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:

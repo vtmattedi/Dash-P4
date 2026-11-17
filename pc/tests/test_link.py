@@ -32,6 +32,39 @@ class StubMedia:
         return True
 
 
+class StubCall:
+    def __init__(self) -> None:
+        self.call = None
+        self.modes: list[str] = []
+
+    async def get(self):
+        return self.call
+
+    async def mic(self, mode: str) -> bool:
+        self.modes.append(mode)
+        return True
+
+
+class StubDisplay:
+    def __init__(self) -> None:
+        self.state: str | None = None
+        self.wakes = 0
+        self.sleeps = 0
+        self.suspends = 0
+
+    async def wake(self) -> bool:
+        self.wakes += 1
+        return True
+
+    async def sleep(self) -> bool:
+        self.sleeps += 1
+        return True
+
+    async def suspend(self) -> bool:
+        self.suspends += 1
+        return True
+
+
 async def eventually(predicate, timeout: float = 3.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():
@@ -179,6 +212,89 @@ class Session(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(by_id[first]["ok"] and by_id[first]["msg"] == "")
         self.assertTrue(by_id[second]["ok"] and "default browser" in by_id[second]["msg"])
         self.assertFalse(by_id[third]["ok"])  # an unknown browser is refused, nothing is opened
+
+    async def test_monitor_state_is_reported_when_known_and_on_change(self):
+        display = StubDisplay()
+        self.link.display = display
+        self.link.runner.display = display
+        await self.start()
+        await eventually(lambda: self.panel.states)
+        self.assertNotIn("display", self.panel.states[0])  # not known yet: not reported
+        self.assertIn("display", self.panel.hello["caps"])
+        self.assertIn("wake_display", self.panel.hello["caps"])
+        display.state = "off"
+        await eventually(lambda: any(s.get("display") == "off" for s in self.panel.states))
+        off = next(s for s in self.panel.states if s.get("display") == "off")
+        self.assertEqual(off, {"display": "off"})  # only the key that changed
+        display.state = "on"
+        await eventually(lambda: any(s.get("display") == "on" for s in self.panel.states))
+
+    async def test_call_state_is_reported_on_change(self):
+        call = StubCall()
+        self.link.call = call
+        self.link.runner.call = call
+        await self.start()
+        self.assertIn("call", self.panel.hello["caps"])
+        self.assertIn("mic", self.panel.hello["caps"])
+        call.call = {"active": True, "app": "Meet", "muted": False}
+        await eventually(lambda: any(s.get("call") for s in self.panel.states))
+        call.call = {"active": True, "app": "Meet", "muted": True}
+        await eventually(lambda: any((s.get("call") or {}).get("muted") for s in self.panel.states))
+        call.call = None
+        await eventually(lambda: any("call" in s and s["call"] is None for s in self.panel.states[1:]))
+
+    async def test_mic_action(self):
+        call = StubCall()
+        self.link.call = call
+        self.link.runner.call = call
+        await self.start()
+        action = await self.panel.send_action("mic", {"mode": "toggle"})
+        await eventually(lambda: self.panel.results)
+        self.assertTrue(self.panel.results[0]["ok"] and self.panel.results[0]["id"] == action)
+        self.assertEqual(call.modes, ["toggle"])
+        await self.panel.send_action("mic", {"mode": "format c:"})
+        await eventually(lambda: len(self.panel.results) == 2)
+        self.assertFalse(self.panel.results[1]["ok"])  # only the named modes
+
+    async def test_wake_display_action(self):
+        display = StubDisplay()
+        self.link.display = display
+        self.link.runner.display = display
+        await self.start()
+        action = await self.panel.send_action("wake_display")
+        await eventually(lambda: self.panel.results)
+        self.assertTrue(self.panel.results[0]["ok"] and self.panel.results[0]["id"] == action)
+        self.assertEqual(display.wakes, 1)
+
+    async def test_sleep_display_action(self):
+        display = StubDisplay()
+        self.link.display = display
+        self.link.runner.display = display
+        await self.start()
+        self.assertIn("sleep_display", self.panel.hello["caps"])
+        action = await self.panel.send_action("sleep_display")
+        await eventually(lambda: self.panel.results)
+        self.assertTrue(self.panel.results[0]["ok"] and self.panel.results[0]["id"] == action)
+        self.assertEqual(display.sleeps, 1)
+
+    async def test_sleep_pc_action(self):
+        display = StubDisplay()
+        self.link.display = display
+        self.link.runner.display = display
+        await self.start()
+        self.assertIn("sleep_pc", self.panel.hello["caps"])
+        action = await self.panel.send_action("sleep_pc")
+        await eventually(lambda: self.panel.results)
+        self.assertTrue(self.panel.results[0]["ok"] and self.panel.results[0]["id"] == action)
+        self.assertEqual(display.suspends, 1)
+        self.assertEqual(display.sleeps, 0)  # sleeping the PC is not the monitors-off action
+
+    async def test_wake_display_without_a_display_provider(self):
+        await self.start()  # no display provider on this PC
+        await self.panel.send_action("wake_display")
+        await eventually(lambda: self.panel.results)
+        self.assertFalse(self.panel.results[0]["ok"])
+        self.assertNotIn("wake_display", self.panel.hello["caps"])
 
     async def test_heartbeat_keeps_it_alive(self):
         await self.start()

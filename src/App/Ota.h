@@ -33,6 +33,28 @@ void Ota_restartAfterCoprocessor();
 /// The update that ran last (or runs now) was for the co-processor.
 bool Ota_isCoprocessor();
 
+// --- Push: the image arrives in pieces over the PC link (dashlink push-fw) instead of being pulled from a URL.
+// Begin, then Write for every piece in order, and End when the last one is in. End checks the size and the sha256 the PC
+// announced, validates the image and switches the boot slot. Any failure aborts and leaves the running image untouched.
+// All calls come from one task (the link task).
+
+/// Start a push. `coprocessor`: the image is for the ESP32-C6. `sha256Hex` is the announced hash of the whole image.
+bool Ota_pushBegin(bool coprocessor, uint32_t size, const std::string &sha256Hex, std::string &why);
+/// Append the next piece. False (and the push is aborted, `why` says why) on any error.
+bool Ota_pushWrite(const uint8_t *data, size_t length, std::string &why);
+/// The announced size has arrived: verify and finish. True means Done.
+bool Ota_pushEnd(std::string &why);
+/// Drop a push in progress (the link went away): the half-written slot is never booted.
+void Ota_pushAbort(const char *why);
+bool Ota_pushActive();
+/// Bytes received so far / announced, for a progress report.
+uint32_t Ota_pushReceived();
+uint32_t Ota_pushSize();
+/// After a pushed update is Done: restart into it (the C6 is told to switch first for a C6 image).
+void Ota_pushRestart();
+/// sha256 of the ELF the running firmware was built from, 64 hex characters; the PC compares it to its build.
+std::string Ota_runningBuildId();
+
 OtaState Ota_state();
 /// 0..100, or -1 while the image size is not known yet.
 int Ota_percent();

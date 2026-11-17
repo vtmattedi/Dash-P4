@@ -1,5 +1,7 @@
 #include "LinkServer.h"
 
+#include <string.h>
+
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -9,6 +11,7 @@
 #include <NightMare.h>
 
 #include "App/Heap.h"
+#include "App/Ota.h"
 #include "LinkProto.h"
 #include "App/Net.h"
 #include "Version.h"
@@ -134,6 +137,15 @@ bool sendError(int fd, const char *code, const char *message)
     return sendJson(fd, LinkProto::kError, doc);
 }
 
+bool sendStatus(int fd, const char *state, const std::string &message = std::string(), int percent = 0)
+{
+    JsonDocument doc;
+    doc["state"] = state;
+    doc["pct"] = percent;
+    doc["msg"] = message;
+    return sendJson(fd, LinkProto::kStatus, doc);
+}
+
 enum class Read
 {
     Frame,
@@ -202,6 +214,7 @@ void clearPeer(const std::string &why)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_status.connected = false;
+    g_status.callActive = false; // no link, no call to show
     g_status.peer.clear();
     g_status.peerAddress.clear();
     g_status.peerOs.clear();
@@ -235,6 +248,7 @@ void runSession(int fd)
         challenge["nonce"] = nonce;
         challenge["device"] = gDeviceIdentity.getDeviceName();
         challenge["fw"] = VERSION;
+        challenge["elf"] = Ota_runningBuildId(); // which build this is: the PC checks it after a firmware push
         if (!sendJson(fd, LinkProto::kChallenge, challenge))
         {
             return;
@@ -315,6 +329,8 @@ void runSession(int fd)
 
     int64_t lastSentMs = nowMs();
     std::string why = "link closed";
+    bool restartIntoUpdate = false;
+    int lastReportedTenth = -1;
     for (;;)
     {
         if (g_kick.exchange(false))
@@ -359,9 +375,59 @@ void runSession(int fd)
         if (result == Read::Frame)
         {
             g_lastHeardMs = now;
+            if (type == LinkProto::kData)
+            {
+                // A piece of the firmware image: raw bytes, so no JSON. The PC keeps sending, so no ping is needed meanwhile.
+                std::string reason;
+                bool ok = Ota_pushWrite(reinterpret_cast<const uint8_t *>(body.data()), body.size(), reason);
+                if (ok && Ota_pushReceived() == Ota_pushSize())
+                {
+                    ok = Ota_pushEnd(reason);
+                    if (ok)
+                    {
+                        ESP_LOGI(TAG, "update stored; link task stack high-water %u bytes free",
+                                 static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+                        sendStatus(fd, "done", "", 100);
+                        why = "the PC pushed a firmware update; restarting into it";
+                        restartIntoUpdate = true;
+                        break;
+                    }
+                }
+                if (!ok)
+                {
+                    sendStatus(fd, "failed", reason);
+                }
+                else
+                {
+                    const int tenth = Ota_pushSize() ? static_cast<int>(static_cast<uint64_t>(Ota_pushReceived()) * 10 / Ota_pushSize()) : 0;
+                    if (tenth != lastReportedTenth)
+                    {
+                        lastReportedTenth = tenth;
+                        sendStatus(fd, "running", "", tenth * 10);
+                    }
+                }
+                lastSentMs = nowMs();
+                continue;
+            }
             JsonDocument doc;
             const bool parsed = !deserializeJson(doc, body);
-            if (type == LinkProto::kPing)
+            if (type == LinkProto::kUpdate && parsed)
+            {
+                const std::string target = clip(doc["target"] | "", 8);
+                std::string reason;
+                if ((target != "p4" && target != "c6") ||
+                    !Ota_pushBegin(target == "c6", doc["size"] | 0u, clip(doc["sha256"] | "", 64), reason))
+                {
+                    sendStatus(fd, "failed", reason.empty() ? "bad update request" : reason);
+                }
+                else
+                {
+                    lastReportedTenth = -1;
+                    sendStatus(fd, "ready");
+                }
+                lastSentMs = nowMs();
+            }
+            else if (type == LinkProto::kPing)
             {
                 JsonDocument pong;
                 pong["t"] = parsed ? doc["t"] | 0 : 0;
@@ -376,6 +442,19 @@ void runSession(int fd)
             {
                 JsonVariantConst window = doc["window"];
                 std::lock_guard<std::mutex> lock(g_mutex);
+                const char *display = doc["display"] | "";
+                if (strcmp(display, "off") == 0)
+                {
+                    g_status.pcDisplay = 0;
+                }
+                else if (strcmp(display, "on") == 0)
+                {
+                    g_status.pcDisplay = 1;
+                }
+                else if (strcmp(display, "dim") == 0)
+                {
+                    g_status.pcDisplay = 2;
+                }
                 if (window.is<JsonObjectConst>())
                 {
                     const std::string app = clip(window["app"] | "", 40);
@@ -385,6 +464,17 @@ void runSession(int fd)
                 else if (body.find("\"window\"") != std::string::npos)
                 {
                     g_status.window.clear(); // "window": null: nothing focused
+                }
+                JsonVariantConst call = doc["call"];
+                if (call.is<JsonObjectConst>())
+                {
+                    g_status.callActive = call["active"] | false;
+                    g_status.callMuted = call["muted"] | false;
+                    g_status.callApp = clip(call["app"] | "", 24);
+                }
+                else if (body.find("\"call\"") != std::string::npos)
+                {
+                    g_status.callActive = false; // "call": null: not in a call
                 }
             }
             else if (type == LinkProto::kError)
@@ -428,7 +518,16 @@ void runSession(int fd)
         g_status.heardAgoMs = static_cast<uint32_t>(now - g_lastHeardMs);
     }
     ESP_LOGI(TAG, "%s", why.c_str());
+    if (Ota_pushActive())
+    {
+        Ota_pushAbort("The PC link was lost during the update.");
+    }
     clearPeer(why);
+    if (restartIntoUpdate)
+    {
+        vTaskDelay(pdMS_TO_TICKS(800)); // let the "done" reach the PC
+        Ota_pushRestart();
+    }
 }
 
 void serverTask(void *)
@@ -524,7 +623,7 @@ void LinkServer_begin()
     // The stack lives in PSRAM (internal RAM is the scarce pool). This task never writes flash, which a PSRAM stack forbids.
     if (xTaskCreateWithCaps(serverTask, "link", 8192, nullptr, 3, &g_task, MALLOC_CAP_SPIRAM) != pdPASS)
     {
-        xTaskCreate(serverTask, "link", 8192, nullptr, 3, &g_task);
+        xTaskCreate(serverTask, "link", 10240, nullptr, 3, &g_task);
     }
 }
 
@@ -563,19 +662,14 @@ bool LinkServer_setToken(const std::string &requested)
 
 void LinkServer_disconnect() { g_kick = true; }
 
-uint32_t LinkServer_openUrl(const std::string &url, const std::string &browser)
+namespace
 {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_status.connected)
-    {
-        return 0;
-    }
+// Queue an action frame for the session loop and start following its result. Caller holds g_mutex and has checked the
+// link is up.
+uint32_t queueAction(JsonDocument &doc)
+{
     const uint32_t id = g_nextAction++;
-    JsonDocument doc;
     doc["id"] = id;
-    doc["name"] = "open_url";
-    doc["args"]["url"] = url;
-    doc["args"]["browser"] = browser;
     std::string body;
     serializeJson(doc, body);
     g_outbox.push_back(LinkProto::encodeFrame(LinkProto::kAction, body));
@@ -587,6 +681,96 @@ uint32_t LinkServer_openUrl(const std::string &url, const std::string &browser)
         g_pending.erase(g_pending.begin());
     }
     return id;
+}
+} // namespace
+
+uint32_t LinkServer_openUrl(const std::string &url, const std::string &browser)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_status.connected)
+    {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["name"] = "open_url";
+    doc["args"]["url"] = url;
+    doc["args"]["browser"] = browser;
+    return queueAction(doc);
+}
+
+uint32_t LinkServer_wakePcDisplay()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_status.connected)
+    {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["name"] = "wake_display";
+    return queueAction(doc);
+}
+
+uint32_t LinkServer_sleepPcDisplay()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_status.connected)
+    {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["name"] = "sleep_display";
+    return queueAction(doc);
+}
+
+uint32_t LinkServer_sleepPc()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_status.connected)
+    {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["name"] = "sleep_pc";
+    return queueAction(doc);
+}
+
+uint32_t LinkServer_micMute(const std::string &mode)
+{
+    if (mode != "mute" && mode != "unmute" && mode != "toggle")
+    {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_status.connected)
+    {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["name"] = "mic";
+    doc["args"]["mode"] = mode;
+    return queueAction(doc);
+}
+
+PcCall LinkServer_call()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    PcCall call;
+    call.active = g_status.connected && g_status.callActive;
+    call.muted = g_status.callMuted;
+    call.app = g_status.callApp;
+    return call;
+}
+
+bool LinkServer_connected()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_status.connected;
+}
+
+int LinkServer_pcDisplay()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_status.pcDisplay;
 }
 
 LinkResult LinkServer_result(uint32_t id)

@@ -24,6 +24,9 @@ constexpr char kPong = 'O';
 constexpr char kState = 'S';
 constexpr char kAction = 'A';
 constexpr char kResult = 'R';
+constexpr char kUpdate = 'U'; // PC -> panel: a firmware image follows
+constexpr char kData = 'D';   // PC -> panel: raw bytes of that image (the payload is not JSON)
+constexpr char kStatus = 'T'; // panel -> PC: how the update is going
 
 /// One complete frame, ready to send.
 std::string encodeFrame(char type, const std::string &json = std::string());

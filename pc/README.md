@@ -2,7 +2,7 @@
 
 Links a PC to the panel over the local network, directly (no broker). **Version 0 is a proof that two-way communication
 works**: pairing, liveness, the focused window (PC to panel), and two actions the panel can trigger (open a link, press a
-media key). Not in v0, on purpose: encryption, now-playing metadata, Linux. The wire format is in [PROTOCOL.md](PROTOCOL.md).
+media key, wake the monitor, turn the monitors off, put the PC to sleep). The PC also reports when its monitor goes off or on, so the panel can blank with it. Not in v0, on purpose: encryption, now-playing metadata, Linux. The wire format is in [PROTOCOL.md](PROTOCOL.md).
 
 ## Try it without the board
 
@@ -24,8 +24,23 @@ The token can also come from the `DASHLINK_TOKEN` environment variable. `--allow
 which sites the panel may open on the PC. Window titles are sent to the panel as they are, so anything in a title is
 visible on it.
 
-The panel side (a TCP server in the firmware, a pairing token in Settings) is not written yet: today the only panel is
-`fakepanel.py`, which doubles as the reference for what the firmware has to do.
+## Updating the panel's firmware
+
+```
+pio run -e jc1060p470c
+python -m dashlink push-fw --host <the panel's IP> --token <pairing token>
+```
+
+It sends `.pio/build/jc1060p470c/firmware.bin` (or `--file`) over the link, the panel writes it to the idle slot, checks
+it, restarts, and the command confirms the new build is the one running (or says the panel rolled back). If `dashlink`
+is already running, `push-fw` uses its link through a localhost-only control port (`--control-port`, default 7341).
+`--target c6` pushes a C6 co-processor image, `--force` pushes a build the panel already runs. The first time, a panel
+without this feature has to be flashed over USB. See "Firmware push" in PROTOCOL.md; `fakepanel.py` does the same
+steps for the tests.
+
+`--target dashboard` pushes the Dashboard's build (`devices/Dashboard`) the same way, but straight to that panel: it
+never goes through a running `dashlink` or Dash-P4. Open update mode on the Dashboard first (Settings > Update from PC),
+and use its `--host` and its own `DASHLINK_TOKEN`. The Dashboard answers only the challenge, pings and the push.
 
 ## Tests
 

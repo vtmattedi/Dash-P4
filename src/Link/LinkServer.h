@@ -24,6 +24,10 @@ struct LinkStatus
     uint32_t heardAgoMs = 0;  // since the last frame from the PC
     uint32_t sessions = 0;    // accepted pairings since boot
     uint32_t rejected = 0;    // refused (bad token, bad hello) since boot
+    int pcDisplay = -1;       // the PC's monitor: -1 not reported, 0 off, 1 on, 2 dimmed. Kept when the link drops.
+    bool callActive = false;  // the PC reports a call (an app is capturing the microphone). Cleared when the link drops.
+    bool callMuted = false;   // the PC's default microphone is muted
+    std::string callApp;      // "Google Meet", "Discord", ... or the process name
     std::string window;       // the PC's focused window: "app: title", empty when none
     std::string message;      // the last thing worth telling: "waiting for a PC", "wrong token", "link lost: ..."
 };
@@ -33,6 +37,9 @@ struct LinkStatus
 void LinkServer_begin();
 
 LinkStatus LinkServer_status();
+
+/// Whether a PC is paired and linked right now, without copying the whole status.
+bool LinkServer_connected();
 
 /// The pairing token a PC must use.
 std::string LinkServer_token();
@@ -56,5 +63,28 @@ struct LinkResult
 /// Ask the linked PC to open a link (browser: "chrome" or "default"). Returns an id to follow with LinkServer_result(), or
 /// 0 when no PC is linked. Safe from any task; the frame goes out within a fraction of a second.
 uint32_t LinkServer_openUrl(const std::string &url, const std::string &browser = "chrome");
+
+/// Ask the linked PC to turn its monitor back on. Same id / result as LinkServer_openUrl(); 0 when no PC is linked.
+uint32_t LinkServer_wakePcDisplay();
+/// Ask the linked PC to turn its monitors off. Same id / result as above; the PC then reports display "off".
+uint32_t LinkServer_sleepPcDisplay();
+/// Ask the linked PC to go to sleep (suspend). Same id / result as above. The link drops with the PC, and nothing sent
+/// from here can wake it again.
+uint32_t LinkServer_sleepPc();
+
+/// The PC's call state (see LinkStatus::callActive), without copying the whole status.
+struct PcCall
+{
+    bool active = false;
+    bool muted = false;
+    std::string app;
+};
+PcCall LinkServer_call();
+/// Ask the PC to mute, unmute or toggle its default microphone ("mute", "unmute", "toggle"). Same id / result as above; the
+/// PC then reports the new state. 0 when no PC is linked.
+uint32_t LinkServer_micMute(const std::string &mode);
+
+/// The PC's monitor state (see LinkStatus::pcDisplay), without copying the whole status.
+int LinkServer_pcDisplay();
 
 LinkResult LinkServer_result(uint32_t id);
