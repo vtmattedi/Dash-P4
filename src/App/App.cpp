@@ -5,18 +5,25 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <atomic>
+#include <algorithm>
+#include <math.h>
 #include <string>
 
 #include "board.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "lvgl.h"
 
 #include "AcClient.h"
-#include "Battery.h"
+#include "LedFeedback.h"
+#include "MicTest.h"
+#include "LedStrip.h"
+#include "PcPower.h"
 #include "SysMon.h"
 #include "Feed.h"
 #include "Link/LinkServer.h"
+#include "UI/Rest.h"
 #include "UI/Ui.h"
 #include "FeedSync.h"
 #include "Bindings.h"
@@ -76,6 +83,7 @@ void unsubscribePort(const std::string &filter) { Net_unsubscribe(filter); }
 // state is only read between board_lvgl_lock() and board_lvgl_unlock().
 //
 //   HEAP                       internal / PSRAM free, largest internal block
+//   LED <r> <g> <b> | <RRGGBB> | OFF | BRIGHT <0-64> | STATUS   the WS2812B strip
 //   NET                        transport snapshot and inbox counters
 //   NETLOG [ON|OFF]            print every received topic to the serial log
 //   REGISTRY [<device>]        counts, or one device's resources
@@ -109,6 +117,43 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
                  (unsigned)Heap_internalMinFree(), (unsigned)Heap_psramFree(),
                  (unsigned)Heap_psramTotal());
         return answer(true, line);
+    }
+
+    if (message.command == "LED")
+    {
+        if (!LedStrip_ready())
+        {
+            return answer(false, "LED strip not available");
+        }
+        bool ok = true;
+        // The console is one more feedback source ("console", above the built-in network one, below alerts); OFF/CLEAR drops it.
+        if (message.subcommand == "OFF" || message.subcommand == "CLEAR")
+        {
+            LedFeedback_clear("console");
+        }
+        else if (message.subcommand == "BRIGHT" && message.argc >= 2)
+        {
+            ok = LedStrip_setBrightness(static_cast<uint8_t>(atoi(message.args[1].c_str())));
+        }
+        else if (message.argc >= 3) // LED <r> <g> <b>
+        {
+            const uint32_t r = atoi(message.args[0].c_str()) & 0xFF;
+            const uint32_t g = atoi(message.args[1].c_str()) & 0xFF;
+            const uint32_t b = atoi(message.args[2].c_str()) & 0xFF;
+            LedEffect fx;
+            fx.rgb = (r << 16) | (g << 8) | b;
+            ok = LedFeedback_set("console", fx, LED_PRIO_INFO);
+        }
+        else if (message.argc >= 1 && message.subcommand != "STATUS") // LED RRGGBB (hex, optional #)
+        {
+            const char *hex = message.args[0].c_str();
+            LedEffect fx;
+            fx.rgb = static_cast<uint32_t>(strtoul(hex[0] == '#' ? hex + 1 : hex, nullptr, 16));
+            ok = LedFeedback_set("console", fx, LED_PRIO_INFO);
+        }
+        snprintf(line, sizeof(line), "{\"ok\":%s,\"colour\":\"%06X\",\"brightness\":%u}", ok ? "true" : "false",
+                 (unsigned)LedStrip_colour(), (unsigned)LedStrip_brightness());
+        return answer(ok, line);
     }
 
     if (message.command == "NET")
@@ -223,6 +268,80 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
         }
         board_lvgl_unlock();
         return answer(ok, out);
+    }
+
+    if (message.command == "MIC")
+    {
+        // MIC [seconds [gain dB]]: record from the board microphone and report levels (a test of the codec, the pins and the
+        // gain; the recording is thrown away). Runs on the console task, not the LVGL one.
+        const int seconds = message.argc >= 1 ? atoi(message.args[0].c_str()) : 3;
+        if (message.argc >= 2)
+        {
+            board_audio_set_gain(static_cast<float>(atof(message.args[1].c_str())));
+        }
+        bool ok = false;
+        const std::string report = MicTest_run(seconds, ok);
+        return answer(ok, report);
+    }
+
+    if (message.command == "SCREENPASS")
+    {
+        // Panel recovery for faint edge/column ghosts (image sticking): full-screen solid colours cycled every 2 s on the
+        // system layer, above everything; any touch or SCREENPASS STOP ends it. Same recovery that cleared the ghosts in
+        // .local/findings.md section 16 (about half an hour). Optional argument: minutes (default 30).
+        static lv_obj_t *cover = nullptr;
+        static lv_timer_t *timer = nullptr;
+        static int step = 0, remaining = 0;
+        if (!board_lvgl_lock(1000))
+        {
+            return answer(false, "LVGL busy");
+        }
+        auto stop = []()
+        {
+            if (timer)
+            {
+                lv_timer_delete(timer);
+                timer = nullptr;
+            }
+            if (cover)
+            {
+                lv_obj_delete(cover);
+                cover = nullptr;
+            }
+        };
+        std::string out;
+        if (message.subcommand == "STOP")
+        {
+            stop();
+            out = "screen pass stopped";
+        }
+        else
+        {
+            stop();
+            const int minutes = message.argc >= 1 ? atoi(message.args[0].c_str()) : 30;
+            remaining = (minutes > 0 ? minutes : 30) * 30; // ticks of 2 s
+            step = 0;
+            cover = lv_obj_create(lv_layer_sys());
+            lv_obj_remove_style_all(cover);
+            lv_obj_set_size(cover, LV_PCT(100), LV_PCT(100));
+            lv_obj_set_style_bg_opa(cover, LV_OPA_COVER, 0);
+            lv_obj_add_flag(cover, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(cover, [](lv_event_t *) { /* touch ends it */
+                                    if (timer) { lv_timer_delete(timer); timer = nullptr; }
+                                    if (cover) { lv_obj_delete_async(cover); cover = nullptr; } },
+                                LV_EVENT_CLICKED, nullptr);
+            timer = lv_timer_create([](lv_timer_t *)
+                                    {
+                static const uint32_t kColours[] = {0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF, 0x000000};
+                if (!cover) return;
+                lv_obj_set_style_bg_color(cover, lv_color_hex(kColours[step++ % 5]), 0);
+                if (--remaining <= 0) { lv_timer_delete(timer); timer = nullptr; lv_obj_delete_async(cover); cover = nullptr; } },
+                                    2000, nullptr);
+            lv_timer_ready(timer);
+            out = "screen pass running; touch the screen or SCREENPASS STOP to end it";
+        }
+        board_lvgl_unlock();
+        return answer(true, out);
     }
 
     if (message.command == "C6OTA")
@@ -375,7 +494,7 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
         return answer(true, line);
     }
 
-    return answer(false, "Unknown command. Available: [HEAP, NET, NETLOG, REGISTRY, FEED, LINK, PERF, SPSIM, TARGET, C6OTA]. "
+    return answer(false, "Unknown command. Available: [HEAP, LED, NET, NETLOG, REGISTRY, FEED, LINK, PERF, SPSIM, TARGET, C6OTA, SCREENPASS, MIC]. "
                          "Framework built-ins and `>` resource commands still apply.");
 }
 
@@ -422,6 +541,36 @@ static void saveFeedCache(const std::string &snapshot)
 
 static bool g_settingsLoaded = false;
 
+// The PC's monitor going off blanks the panel and the LED strip; coming back on wakes them. A touch on the dark panel
+// wakes the PC's monitor too. Hibernate and sleep are not handled: the link just drops and the panel keeps its state.
+static void wakeBoth()
+{
+    LedStrip_sleep(false);
+    LinkServer_wakePcDisplay();
+}
+
+static void followPcDisplay()
+{
+    static int applied = -1; // the last state acted on: 0 off, 1 on (dimmed changes nothing)
+    const int now = LinkServer_pcDisplay();
+    if ((now != 0 && now != 1) || now == applied)
+    {
+        return;
+    }
+    const int before = applied;
+    applied = now;
+    if (now == 0)
+    {
+        LedStrip_sleep(true);
+        Rest_screenOffThen(wakeBoth);
+    }
+    else if (before == 0) // only a real off -> on wakes the panel; a first "on" just says the PC is awake
+    {
+        LedStrip_sleep(false);
+        Rest_wake();
+    }
+}
+
 static void housekeepingTimer(lv_timer_t *)
 {
     static uint32_t appliedRevision = UINT32_MAX;
@@ -430,7 +579,9 @@ static void housekeepingTimer(lv_timer_t *)
     Mqttp_tick();
     StackportSim_tick(nowMs());
     Ping_tick();
-    Battery_sample();
+    LedStrip_tick();
+    followPcDisplay();
+    PcPower_tick();
     SysMon_sample();
     if (!Feed_tick())
     {
@@ -524,6 +675,7 @@ void App_loadSettings()
     // soon as it knows the address.
     AcClient_begin();
     LightControl_begin();
+    PcPower_begin();
     Feed_begin(PersistentSettings.get("feed_dismissed", ""),
                [](const std::string &text) { PersistentSettings.set("feed_dismissed", text); });
     // The saved feed: shown at once, and the sync task resumes from its cursor (FeedSync_begin reads it).
@@ -537,7 +689,8 @@ void App_loadSettings()
     }
     Feed_setCacheSaver(saveFeedCache);
     FeedSync_begin();
-    Battery_begin();
+    LedStrip_begin();
+    LedFeedback_begin();
     LinkServer_begin();
     g_settingsLoaded = true;
     board_lvgl_unlock();

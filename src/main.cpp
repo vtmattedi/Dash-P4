@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string>
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
@@ -13,6 +14,8 @@
 #include "board.h"
 #include "App/App.h"
 #include "App/Heap.h"
+#include "App/MicTest.h"
+#include "App/Net.h"
 #include "App/Prefs.h"
 #include "UI/Rest.h"
 #include "UI/Ui.h"
@@ -30,6 +33,23 @@ static void nmTask(void *)
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
+
+#ifdef MIC_SELFTEST
+// Temporary bring-up aid (build flag -DMIC_SELFTEST=1): the serial console does not take input on this board, so the
+// microphone test runs by itself 20 s after boot and 20 s after that, logging the levels. Make some noise during it.
+static void micSelfTest(void *)
+{
+    for (int round = 0; round < 3; ++round)
+    {
+        vTaskDelay(pdMS_TO_TICKS(20000));
+        ESP_LOGW(TAG, "MIC SELFTEST: recording 5 s now, tap or talk next to the board");
+        bool ok = false;
+        const std::string report = MicTest_run(5, ok);
+        ESP_LOGW(TAG, "MIC SELFTEST %s: %s", ok ? "ok" : "FAILED", report.c_str());
+    }
+    vTaskDelete(nullptr);
+}
+#endif
 
 extern "C" void app_main(void)
 {
@@ -71,17 +91,13 @@ extern "C" void app_main(void)
 
     board_set_backlight(static_cast<uint8_t>(Prefs_get().blActive));
     startNightMareESP();
-#if NM_NETWORK_ESPNOW
-    // ESP-NOW through the C6 (dash-p4-c6 firmware): preferred for its latency -- the gateway fans ESP-NOW
-    // traffic out locally before it reaches the broker. The library falls back to MQTT by itself while no
-    // gateway has completed the handshake, and whenever the C6 runs a firmware without the bridge.
-    NightMare::SelectConnection(NightMare::ConnectionType::ESP_NOW);
-#else
-    // MQTT is the only transport. The library starts the remote broker on the first
-    // Wi-Fi connection (creds.h: REMOTE_MQTT_URL / PORT / ROOT_CA); this just pins the routing
-    // preference so nothing else is ever chosen.
-    NightMare::SelectConnection(NightMare::ConnectionType::MQTT);
-#endif
+    // Nothing network-wise has started by itself (NM_WIFI_AUTO=0, NM_ESPNOW_AUTO=0 in platformio.ini): the Wi-Fi station and the
+    // one transport the user chose (Settings > Network) are brought up from the saved settings. ESP-NOW goes through the C6
+    // (dash-p4-c6 firmware); with any other co-processor firmware it reports "not supported" and MQTT is the one to pick.
+    Net_applyPrefs(true);
     Heap_log("after network start");
     xTaskCreate(nmTask, "nm", 6144, nullptr, 3, nullptr);
+#ifdef MIC_SELFTEST
+    xTaskCreate(micSelfTest, "micself", 6144, nullptr, 2, nullptr);
+#endif
 }

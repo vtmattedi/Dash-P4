@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "../../src/App/Battery.h"
 #include "../../src/App/Calendar.h"
 #include "../../src/Link/LinkProto.h"
 #include "../../src/App/SysMon.h"
@@ -1073,15 +1072,6 @@ void testSysMon()
     CHECK(SysMon_usedPercent(61 * 1024, 330 * 1024) == 82);
 }
 
-void testBattery()
-{
-    CHECK(Battery_percentFromPinMv(2450) == 100 && Battery_percentFromPinMv(2200) == 0);
-    CHECK(Battery_percentFromPinMv(2325) == 50);
-    CHECK(Battery_percentFromPinMv(3000) == 100 && Battery_percentFromPinMv(100) == 0); // clamped
-    CHECK(Battery_millivoltsFromPinMv(2450) == 4200 && Battery_millivoltsFromPinMv(2200) == 3700);
-    CHECK(!Battery_state().present); // nothing sampled on the host
-}
-
 int main()
 {
     testRegistry();
@@ -1099,7 +1089,6 @@ int main()
     testFeedCache();
     testLinkProto();
     testSysMon();
-    testBattery();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

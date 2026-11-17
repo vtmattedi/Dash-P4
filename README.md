@@ -5,6 +5,11 @@ NightMare Network wall dashboard for the **Guition JC1060P470C** (ESP32-P4, 16 M
 A wall display for the day: the clock, the calendar (events and deadlines), tasks (Linear and WOI), Stackport's health,
 and the NightMare devices (AC, light, door). A small companion app on the PC (`pc/`) lets the panel open links on it.
 
+This panel is the only device with a link to the PC, so it offers the PC's power controls to the rest of the NightMare
+network as resources of its own: `pc_linked` (a bool: a PC is paired and connected) and the actions `pc_monitors_off`
+and `pc_sleep`, neither with arguments. Another panel (`devices/Dashboard`) binds this device and invokes them. See
+[src/App/PcPower.h](src/App/PcPower.h).
+
 ## Environments
 
 | Env | What it builds |

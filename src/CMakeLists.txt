@@ -6,7 +6,7 @@ file(GLOB_RECURSE app_sources
 )
 
 set(app_requires board)
-set(app_priv_requires espressif__esp_hosted app_update esp_http_client esp_https_ota esp-tls esp_adc mbedtls lwip)
+set(app_priv_requires espressif__esp_hosted app_update esp_http_client esp_https_ota esp-tls mbedtls lwip espressif__led_strip esp_driver_rmt)
 
 idf_component_register(
     SRCS ${app_sources}
