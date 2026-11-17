@@ -36,7 +36,34 @@ void Prefs_load()
     g_prefs.restAfterSec = clampInt(readInt("rest_after", 60), 0, 86400);
     g_prefs.blActive = clampInt(readInt("bl_active", 200), 8, 255);
     g_prefs.blRest = clampInt(readInt("bl_rest", 24), 0, 255);
+    g_prefs.netMode = clampInt(readInt("net_mode", g_prefs.netMode), NET_MODE_MQTT, NET_MODE_NONE);
+#if !NM_NETWORK_ESPNOW
+    if (g_prefs.netMode == NET_MODE_ESPNOW)
+    {
+        g_prefs.netMode = NET_MODE_MQTT; // this build has no ESP-NOW
+    }
+#endif
+    g_prefs.wifiOn = readInt("wifi_on", 1) != 0;
+    g_prefs.ledOn = readInt("led_on", 1) != 0;
     ++g_revision;
+}
+
+void Prefs_setWifiOn(bool on)
+{
+    g_prefs.wifiOn = on;
+    store("wifi_on", on ? 1 : 0);
+}
+
+void Prefs_setLedOn(bool on)
+{
+    g_prefs.ledOn = on;
+    store("led_on", on ? 1 : 0);
+}
+
+void Prefs_setNetMode(int mode)
+{
+    g_prefs.netMode = clampInt(mode, NET_MODE_MQTT, NET_MODE_NONE);
+    store("net_mode", g_prefs.netMode);
 }
 
 const Prefs &Prefs_get() { return g_prefs; }

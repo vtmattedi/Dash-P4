@@ -37,7 +37,7 @@
 // some devices also publish.
 #define NM_ENABLE_JSON_WIRE 1
 
-#define NM_WIFI_AUTO 1
+// NM_WIFI_AUTO / NM_ESPNOW_AUTO are set to 0 in platformio.ini: Net_applyPrefs() starts the network from the saved settings.
 
 // Diagnostic only, and costly: skip it.
 #define NM_ENABLE_REMOTE_RESOURCE_VERIFICATION 0

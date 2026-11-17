@@ -19,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "nm_espnow_rpc.h"
+#include "nm_espnow_tap.h"
 
 static const char *TAG = "espnow_hosted";
 
@@ -36,6 +37,12 @@ static bool s_listening;
 
 static esp_now_recv_cb_t s_recv_cb;
 static esp_now_send_cb_t s_send_cb;
+static nm_espnow_tap_t s_tap;
+
+void nm_espnow_set_tap(nm_espnow_tap_t tap)
+{
+    s_tap = tap;
+}
 
 static void on_coprocessor(uint32_t msg_id, const uint8_t *data, size_t len)
 {
@@ -66,6 +73,9 @@ static void on_coprocessor(uint32_t msg_id, const uint8_t *data, size_t len)
         const uint8_t *payload = data + sizeof(nmen_head_t) + sizeof(nmen_recv_t);
         if (ev.len > len - sizeof(nmen_head_t) - sizeof(nmen_recv_t)) {
             return;
+        }
+        if (s_tap) {
+            s_tap(ev.src, ev.rssi, ev.channel, payload, ev.len);
         }
         esp_now_recv_cb_t cb = s_recv_cb;
         if (cb) {

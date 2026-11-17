@@ -17,6 +17,7 @@
 #include "UI/Rest.h"
 #include "UI/Ui.h"
 #include "UI/Theme.h"
+#include "UI/EspNowSetup.h"
 #include "UI/WifiSetup.h"
 #include "board.h"
 #include "esp_chip_info.h"
@@ -130,6 +131,47 @@ lv_obj_t *sliderRow(lv_obj_t *card, const char *label, int min, int max, int val
 
 
 void onWifi(lv_event_t *) { WifiSetup_open(); }
+void onEspNowScan(lv_event_t *) { EspNowScanUi_open(); }
+
+// Wi-Fi (the station) and the transport are separate settings, applied at once by Net_applyPrefs(): ESP-NOW needs only the
+// radio, MQTT needs the station, and "None" runs neither.
+lv_obj_t *g_modeButton[3];
+lv_obj_t *g_wifiButton;
+
+void paintNetwork()
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        if (g_modeButton[i] != nullptr)
+        {
+            lv_obj_set_style_bg_color(g_modeButton[i], Prefs_get().netMode == i ? UI_COL_ACCENT : UI_COL_SURFACE_ALT, 0);
+        }
+    }
+    if (g_wifiButton != nullptr)
+    {
+        lv_obj_set_style_bg_color(g_wifiButton, Prefs_get().wifiOn ? UI_COL_ACCENT : UI_COL_SURFACE_ALT, 0);
+        lv_label_set_text(lv_obj_get_child(g_wifiButton, 0), Prefs_get().wifiOn ? "Wi-Fi on" : "Wi-Fi off");
+    }
+}
+
+void onNetMode(lv_event_t *e)
+{
+    const int mode = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    if (mode == Prefs_get().netMode)
+    {
+        return;
+    }
+    Prefs_setNetMode(mode);
+    Net_applyPrefs();
+    paintNetwork();
+}
+
+void onWifiSwitch(lv_event_t *)
+{
+    Prefs_setWifiOn(!Prefs_get().wifiOn);
+    Net_applyPrefs();
+    paintNetwork();
+}
 
 void refreshNetwork()
 {
@@ -437,9 +479,23 @@ lv_obj_t *PageSettings_create(lv_obj_t *parent)
     lv_obj_t *netRow = Theme_row(net, lv_pct(100), 56);
     buttonIn(netRow, LV_SYMBOL_WIFI "  Wi-Fi network...", 230, onWifi);
 #if NM_NETWORK_ESPNOW
-    Theme_label(netRow, "ESP-NOW through the C6 first (needs the dash-p4-c6 firmware), remote MQTT as the fallback.", UI_FONT_S, UI_COL_TEXT_FAINT);
+    buttonIn(netRow, LV_SYMBOL_EYE_OPEN "  ESP-NOW scan...", 230, onEspNowScan);
+#endif
+    lv_obj_t *modeRow = Theme_row(net, lv_pct(100), 56);
+    g_wifiButton = buttonIn(modeRow, "Wi-Fi on", 150, onWifiSwitch);
+    Theme_label(modeRow, "Network", UI_FONT_M, UI_COL_TEXT_DIM);
+    g_modeButton[NET_MODE_MQTT] = buttonIn(modeRow, "MQTT", 120, onNetMode, Tone::Neutral, reinterpret_cast<void *>(static_cast<intptr_t>(NET_MODE_MQTT)));
+#if NM_NETWORK_ESPNOW
+    g_modeButton[NET_MODE_ESPNOW] = buttonIn(modeRow, "ESP-NOW", 140, onNetMode, Tone::Neutral, reinterpret_cast<void *>(static_cast<intptr_t>(NET_MODE_ESPNOW)));
 #else
-    Theme_label(netRow, "Remote MQTT only. ESP-NOW and the local broker are switched off in this build.", UI_FONT_S, UI_COL_TEXT_FAINT);
+    g_modeButton[NET_MODE_ESPNOW] = nullptr;
+#endif
+    g_modeButton[NET_MODE_NONE] = buttonIn(modeRow, "None", 110, onNetMode, Tone::Neutral, reinterpret_cast<void *>(static_cast<intptr_t>(NET_MODE_NONE)));
+    paintNetwork();
+#if NM_NETWORK_ESPNOW
+    Theme_label(netRow, "Wi-Fi and the network are separate. ESP-NOW needs only the radio (and the dash-p4-c6 firmware), MQTT needs Wi-Fi.", UI_FONT_S, UI_COL_TEXT_FAINT);
+#else
+    Theme_label(netRow, "Wi-Fi and the network are separate. This build has MQTT only; ESP-NOW is not compiled in.", UI_FONT_S, UI_COL_TEXT_FAINT);
 #endif
 
     // Bindings.

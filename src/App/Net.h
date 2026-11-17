@@ -64,6 +64,15 @@ bool Net_publish(const std::string &topic, const std::string &payload, bool reta
 bool Net_publishBytes(const std::string &topic, const uint8_t *payload, size_t length,
                       bool retained = false);
 
+/// Make the running services match Prefs: the Wi-Fi station on or off, and exactly one of MQTT / ESP-NOW / neither. Call once
+/// after startNightMareESP() (the build sets NM_WIFI_AUTO=0 and NM_ESPNOW_AUTO=0, so nothing has started by itself) and again
+/// whenever a setting changes. LVGL task; may block for a moment while a service stops.
+/// Bring the Wi-Fi station and the chosen transport in line with Prefs. From the UI call it as is: it runs on its own task
+/// (see Net_applying()). `wait` runs it here, to completion: for start-up, before the NightMare task exists.
+void Net_applyPrefs(bool wait = false);
+/// True while a change is being applied.
+bool Net_applying();
+
 /// Snapshot of transport health.
 struct NetState
 {
@@ -73,6 +82,7 @@ struct NetState
     bool wifiIp;   // station has an address
     bool mqtt;     // MQTT connected
     bool espNow;   // ESP-NOW session up
+    bool espNowEnabled; // the ESP-NOW service is on (it may not have a session yet)
 };
 NetState Net_state();
 

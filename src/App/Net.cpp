@@ -1,5 +1,7 @@
 #include "Net.h"
 
+#include "Prefs.h"
+
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -10,6 +12,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/task.h"
 
 static const char *TAG = "net";
 
@@ -292,6 +295,101 @@ void Net_drain(uint32_t budgetMs)
     }
 }
 
+namespace
+{
+std::atomic<bool> g_applying{false};
+std::atomic<bool> g_applyAgain{false};
+
+void applyNow()
+{
+    const Prefs &prefs = Prefs_get();
+
+    // The station first: MQTT needs it, ESP-NOW does not (it rides the radio, which stays up).
+    if (prefs.wifiOn)
+    {
+        if (!NightMare::WiFiIP_enabled() && !NightMare::WiFiBegin())
+        {
+            ESP_LOGE(TAG, "Wi-Fi station did not start");
+        }
+    }
+    else if (NightMare::WiFiIP_enabled())
+    {
+        NightMare::WiFiIP_disable();
+    }
+
+    const bool wantMqtt = prefs.netMode == NET_MODE_MQTT;
+    const bool wantEspNow = prefs.netMode == NET_MODE_ESPNOW;
+    if (!wantMqtt && NightMare::Mqtt_enabled())
+    {
+        NightMare::Mqtt_disable();
+    }
+#if NM_NETWORK_ESPNOW
+    if (!wantEspNow && NightMare::EspNow_enabled())
+    {
+        NightMare::EspNow_disable();
+    }
+    if (wantEspNow && !NightMare::EspNow_enabled() && !NightMare::EspNow_enable())
+    {
+        ESP_LOGE(TAG, "ESP-NOW did not start");
+    }
+#endif
+    if (wantMqtt && !NightMare::Mqtt_enabled())
+    {
+#if NM_NETWORK_MQTT
+        const NightMare::MqttProfile profile = NightMare::MqttProfile::REMOTE;
+#else
+        const NightMare::MqttProfile profile = NightMare::MqttProfile::LOCAL;
+#endif
+        if (!NightMare::Mqtt_enable(profile))
+        {
+            ESP_LOGE(TAG, "MQTT did not start");
+        }
+    }
+    if (wantMqtt)
+    {
+        NightMare::SelectConnection(NightMare::ConnectionType::MQTT);
+    }
+    else if (wantEspNow)
+    {
+        NightMare::SelectConnection(NightMare::ConnectionType::ESP_NOW);
+    }
+}
+
+// Switching transports talks to the C6 (RPC round trips, each able to wait seconds) and starts or stops tasks, so from the
+// UI it runs on its own short-lived task: the LVGL task keeps drawing. A change made while it runs is applied after.
+void applyTask(void *)
+{
+    do
+    {
+        g_applyAgain = false;
+        applyNow();
+    } while (g_applyAgain.load());
+    g_applying = false;
+    vTaskDelete(nullptr);
+}
+} // namespace
+
+void Net_applyPrefs(bool wait)
+{
+    if (wait)
+    {
+        applyNow();
+        return;
+    }
+    if (g_applying.exchange(true))
+    {
+        g_applyAgain = true;
+        return;
+    }
+    if (xTaskCreate(applyTask, "netapply", 6144, nullptr, 3, nullptr) != pdPASS)
+    {
+        g_applying = false;
+        applyNow(); // no memory for a task: do it here rather than not at all
+    }
+}
+
+bool Net_applying() { return g_applying.load(); }
+
 NetState Net_state()
 {
     NetState state{};
@@ -301,7 +399,9 @@ NetState Net_state()
     state.wifiIp = NightMare::WiFiIP_state() == NightMare::ConnectivityState::CONNECTED;
     state.mqtt = NightMare::Mqtt_state() == NightMare::ConnectivityState::CONNECTED;
     state.espNow = false;
+    state.espNowEnabled = false;
 #if NM_NETWORK_ESPNOW
+    state.espNowEnabled = NightMare::EspNow_enabled();
     state.espNow = NightMare::EspNow_state() == NightMare::ConnectivityState::CONNECTED;
 #endif
     return state;
