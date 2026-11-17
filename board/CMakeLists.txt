@@ -5,6 +5,6 @@ file(GLOB board_sources ${CMAKE_CURRENT_LIST_DIR}/*.c ${CMAKE_CURRENT_LIST_DIR}/
 idf_component_register(
     SRCS ${board_sources}
     INCLUDE_DIRS "."
-    REQUIRES driver esp_lcd esp_driver_ledc esp_driver_i2c
+    REQUIRES driver esp_lcd esp_driver_ledc esp_driver_i2c esp_driver_i2s espressif__esp_codec_dev
     PRIV_REQUIRES esp_timer esp_psram esp_mm
 )

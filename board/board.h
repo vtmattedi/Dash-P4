@@ -11,6 +11,7 @@
 #include "board_pins.h"
 #include "board_display.h"
 #include "board_touch.h"
+#include "board_audio.h"
 #include "board_lvgl.h"
 
 #ifdef __cplusplus
