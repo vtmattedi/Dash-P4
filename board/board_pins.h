@@ -56,6 +56,15 @@
 #define BOARD_BACKLIGHT_PWM_HZ 20000 // [V]
 #define BOARD_BACKLIGHT_PWM_BITS 10  // [V]
 
+// --- WS2812B LED strip: one data line, driven by the RMT peripheral ----------
+// Added by hand to a free header pin.
+#define BOARD_LED_STRIP_GPIO 26  // [V]
+#define BOARD_LED_STRIP_COUNT 10
+// Shown from start-up until something else sets it: dark (App/LedFeedback decides what the strip says).
+#define BOARD_LED_STRIP_BOOT_RGB 0x000000
+// The strip never goes brighter than this (0..255): 10 pixels at full white draw about 600 mA, more than this board should feed.
+#define BOARD_LED_STRIP_MAX_BRIGHTNESS 64
+
 // --- I2C: touch + audio codec (+ camera SCCB) share one bus -----------------
 #define BOARD_I2C_PORT 1       // [V] touch driver asks the bus on port 1
 #define BOARD_I2C_SDA_GPIO 7   // [V]
