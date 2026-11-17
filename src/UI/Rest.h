@@ -16,6 +16,8 @@ void Rest_now();
 void Rest_wake();
 /// Rest with the backlight off. The next touch brightens the screen (and is swallowed); it stays on the rest view.
 void Rest_screenOff();
+/// Screen off, and when the first touch brightens it, run `onTouch` once on the LVGL task. Dropped by Rest_wake().
+void Rest_screenOffThen(void (*onTouch)());
 /// Rest now, and when a touch wakes it (and only a touch) run `afterTouchWake` once, on the LVGL task. Any other
 /// way out of rest (a critical notification, Rest_wake()) drops it.
 void Rest_nowThen(void (*afterTouchWake)());

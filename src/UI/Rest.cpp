@@ -113,6 +113,7 @@ uint32_t g_openAction = 0, g_openActionAt = 0;
 
 bool g_forced = false; // Rest_now(): rest even with the timeout set to never
 void (*g_afterTouchWake)() = nullptr; // Rest_nowThen(): one shot
+void (*g_onDarkTouch)() = nullptr;    // Rest_screenOffThen(): one shot, the touch that brightens the dark screen
 
 void setClock(int h1, int h2, int m1, int m2)
 {
@@ -572,9 +573,15 @@ void refreshStackport()
     lv_obj_set_style_text_color(g_stackTitle, accent, 0);
     Theme_setText(g_stackSub, sub.c_str());
 
-    // UP.
+    // UP: the colour follows the projects' health only (down / unhealthy red, all up green); alerts such as a full disk have
+    // their own arc and the heading above. Faint with no data, amber when the numbers are old.
+    lv_color_t upColour = UI_COL_TEXT_FAINT;
+    if (Stackport_hasData())
+    {
+        upColour = !live ? UI_COL_WARN : bad > 0 ? UI_COL_DANGER : UI_COL_OK;
+    }
     snprintf(buf, sizeof(buf), s.counted > 0 ? "%u" : "-", static_cast<unsigned>(s.ready));
-    setArc(g_stackArcs[ARC_UP], static_cast<int>(s.ready), static_cast<int>(s.counted), accent, buf);
+    setArc(g_stackArcs[ARC_UP], static_cast<int>(s.ready), static_cast<int>(s.counted), upColour, buf);
 
     // NET and DISK.
     const bool haveHost = Stackport_hasData() && host.valid;
@@ -1239,7 +1246,7 @@ void buildTopBar()
     lv_obj_set_flex_align(icons, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_align(icons, LV_ALIGN_TOP_RIGHT, -24, 0);
     g_iconFeed = Theme_label(icons, LV_SYMBOL_REFRESH, UI_FONT_L, UI_COL_TEXT_DIM);
-    StatusIcons_create(g_icons, icons, kBarH); // the same icons as the status bar: Wi-Fi, broker, AC, light, door, battery
+    StatusIcons_create(g_icons, icons, kBarH); // the same icons as the status bar: Wi-Fi, broker, AC, light, door
 }
 
 void buildClock(int clockY, int dateY)
@@ -1399,7 +1406,7 @@ void Rest_begin()
     const int todoY = stackY + kStackHeaderH + 14;
 
     // The MW monogram, behind everything else (created first so it sits at the bottom). It is an opaque RGB565 image
-    // already tinted dim orange: it only ever sits on this black background, and a recoloured alpha mask made LVGL decode
+    // already dimmed (white and orange halves): it only ever sits on this black background, and a recoloured alpha mask made LVGL decode
     // it again on every draw (task watchdog).
     lv_obj_t *logo = lv_image_create(g_root);
     lv_image_set_src(logo, &img_mw_logo);
@@ -1442,6 +1449,12 @@ void Rest_begin()
         lv_obj_add_flag(g_dim, LV_OBJ_FLAG_HIDDEN);
         g_bright = true;
         board_set_backlight(static_cast<uint8_t>(Prefs_get().blActive));
+        void (*hook)() = g_onDarkTouch;
+        g_onDarkTouch = nullptr;
+        if (hook)
+        {
+            hook();
+        }
     }, LV_EVENT_PRESSED, nullptr);
 
     lv_timer_create(onTick, 500, nullptr);
@@ -1473,6 +1486,12 @@ void Rest_screenOff()
     lv_obj_move_foreground(g_dim);
 }
 
+void Rest_screenOffThen(void (*onTouch)())
+{
+    Rest_screenOff();
+    g_onDarkTouch = onTouch;
+}
+
 void Rest_nowThen(void (*afterTouchWake)())
 {
     Rest_now();
@@ -1482,6 +1501,7 @@ void Rest_nowThen(void (*afterTouchWake)())
 void Rest_wake()
 {
     g_afterTouchWake = nullptr;
+    g_onDarkTouch = nullptr;
     if (!g_resting)
     {
         return;

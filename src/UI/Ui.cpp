@@ -5,6 +5,7 @@
 #include "Screens/Pages.h"
 #include "StatusBar.h"
 #include "Theme.h"
+#include "CallDock.h"
 #include "Drawer.h"
 
 namespace
@@ -141,6 +142,7 @@ void Ui_begin(lv_display_t *display)
     }
 
     Drawer_create();
+    CallDock_create();
     Ui_show(UI_PAGE_HOME);
     lv_timer_create(onTick, 250, nullptr);
 }

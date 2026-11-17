@@ -1,11 +1,19 @@
 #include "Drawer.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "App/AcClient.h"
+#include "App/Bindings.h"
+#include "App/Registry.h"
+#include "App/LedFeedback.h"
+#include "App/LedStrip.h"
 #include "App/LightControl.h"
 #include "App/Notifications.h"
+#include "App/PcPower.h"
 #include "App/Prefs.h"
+#include "Link/LinkServer.h"
+#include "Modal.h"
 #include "Rest.h"
 #include "Theme.h"
 #include "Ui.h"
@@ -14,9 +22,16 @@
 namespace
 {
 constexpr int kPanelW = 580; // three tiles across, anchored under the status icons
-constexpr int kPanelH = 398;
+constexpr int kPanelH = 542;
 constexpr int kTileW = 168;
-constexpr int kTileH = 120;
+constexpr int kTileH = 108;
+constexpr int kCardH = 84; // the Sherlock card under the tiles
+
+// The bed would be U+F236, which the 28 px font does not carry yet (FONTS.md says how to add it); until it does the
+// card shows the home symbol that is already there.
+#ifndef UI_ICON_BED
+#define UI_ICON_BED LV_SYMBOL_HOME
+#endif
 constexpr int kSwipeUpPx = 50;
 constexpr int kZoneH = 90;        // the strip at the top right where a downward drag picks the drawer up
 constexpr int kDragStartPx = 14;  // movement before it counts as a drag and not a tap
@@ -38,17 +53,93 @@ lv_obj_t *g_scrim;
 lv_obj_t *g_panel;
 lv_obj_t *g_slider;
 lv_obj_t *g_sliderValue;
+lv_obj_t *g_ledRow;
+lv_obj_t *g_sherlock;
+lv_obj_t *g_sherlockIcon;
+lv_obj_t *g_sherlockTitle;
+lv_obj_t *g_sherlockBar;
+lv_obj_t *g_sherlockSensors;
+
+lv_obj_t *g_ledButton;
 lv_timer_t *g_timer;
-Tile g_light, g_ac, g_rest, g_screenOff;
+Tile g_light, g_ac, g_rest, g_screenOff, g_pcOff;
 bool g_open = false;
 int32_t g_pressY = 0;
 
-void paint(const Tile &tile, bool active, lv_color_t activeColour, const char *caption)
+// Disabled is not off: off is a thing we know is dark, disabled is a thing with nothing true to show (not bound, offline,
+// no data yet). Dimmed, and it takes no taps.
+void setDisabled(lv_obj_t *obj, bool disabled)
 {
+    if (disabled)
+    {
+        lv_obj_add_state(obj, LV_STATE_DISABLED);
+    }
+    else
+    {
+        lv_obj_remove_state(obj, LV_STATE_DISABLED);
+    }
+    lv_obj_set_style_opa(obj, disabled ? LV_OPA_50 : LV_OPA_COVER, 0);
+}
+
+void paint(const Tile &tile, bool active, lv_color_t activeColour, const char *caption, bool disabled = false)
+{
+    setDisabled(tile.button, disabled);
+    active = active && !disabled;
     lv_obj_set_style_bg_color(tile.button, active ? activeColour : UI_COL_SURFACE_ALT, 0);
     lv_obj_set_style_text_color(tile.icon, active ? lv_color_hex(0x10141A) : UI_COL_TEXT_DIM, 0);
     lv_obj_set_style_text_color(tile.caption, active ? lv_color_hex(0x10141A) : UI_COL_TEXT, 0);
     Theme_setText(tile.caption, caption);
+}
+
+void refreshLed();
+
+// Sherlock, the bedroom board: the bar shows what its strip is doing (the colour role), the text its climate sensors.
+void refreshSherlock()
+{
+    const bool bound = Rgb_bound();
+    const std::string &device = Bindings_get(Role::Rgb).device;
+    const Device *dev = bound ? Registry_find(device) : nullptr;
+    const bool offline = dev != nullptr && dev->seenStatus && !dev->online;
+    // Disabled is not off: off is a strip we know is dark, disabled is a card with nothing true to show.
+    const bool disabled = !bound || offline || !Rgb_hasState();
+    const bool on = !disabled && Rgb_on();
+    setDisabled(g_sherlock, disabled);
+    lv_obj_set_style_bg_color(g_sherlockBar, on ? lv_color_hex(Rgb_colour()) : UI_COL_SURFACE_HI, 0);
+    lv_obj_set_style_bg_opa(g_sherlockBar, disabled ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_sherlockBar, disabled ? 1 : 0, 0);
+    lv_obj_set_style_border_color(g_sherlockBar, UI_COL_BORDER, 0);
+    lv_obj_set_style_text_color(g_sherlockIcon, on ? UI_COL_TEXT : UI_COL_TEXT_DIM, 0);
+    if (disabled)
+    {
+        Theme_setText(g_sherlockSensors, !bound ? "Not bound" : (offline ? "Offline" : "No data"));
+        return;
+    }
+    const std::string temp = Registry_valueText(device, "temperature");
+    const std::string hum = Registry_valueText(device, "dht_humidity");
+    char buf[40];
+    int n = 0;
+    if (temp.empty())
+    {
+        n = snprintf(buf, sizeof(buf), "--\xC2\xB0""C");
+    }
+    else
+    {
+        n = snprintf(buf, sizeof(buf), "%.1f\xC2\xB0""C", atof(temp.c_str()));
+    }
+    if (!hum.empty() && n > 0 && n < static_cast<int>(sizeof(buf)))
+    {
+        snprintf(buf + n, sizeof(buf) - n, "   %d%%", static_cast<int>(atof(hum.c_str()) + 0.5));
+    }
+    Theme_setText(g_sherlockSensors, buf);
+}
+
+void onSherlock(lv_event_t *)
+{
+    if (!Rgb_setOn(!Rgb_on()))
+    {
+        Notify(NotifySeverity::Warn, "drawer", "Sherlock", "No transport is connected");
+    }
+    refreshSherlock();
 }
 
 void refresh()
@@ -62,21 +153,48 @@ void refresh()
         paint(g_light, false, UI_COL_WARN, "Light off");
         break;
     case LIGHT_UNKNOWN:
-        paint(g_light, false, UI_COL_WARN, "Light ?");
+        paint(g_light, false, UI_COL_WARN, "Light ?", true);
         break;
     default:
-        paint(g_light, false, UI_COL_WARN, "No light");
+        paint(g_light, false, UI_COL_WARN, "No light", true);
         break;
     }
     if (!AcClient_bound())
     {
-        paint(g_ac, false, UI_COL_INFO, "No AC");
+        paint(g_ac, false, UI_COL_INFO, "No AC", true);
+    }
+    else if (AcClient_isStale())
+    {
+        paint(g_ac, false, UI_COL_INFO, "AC ?", true);
     }
     else
     {
         const bool on = AcClient_powerOn();
         paint(g_ac, on, UI_COL_INFO, on ? "AC on" : "AC off");
     }
+    paint(g_pcOff, false, UI_COL_INFO, LinkServer_connected() ? "PC off" : "No PC", !LinkServer_connected());
+    refreshSherlock();
+    refreshLed();
+}
+
+// The strip is a status light now (App/LedFeedback): the drawer only switches it on or off.
+void refreshLed()
+{
+    if (!LedStrip_ready())
+    {
+        lv_obj_add_flag(g_ledRow, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_remove_flag(g_ledRow, LV_OBJ_FLAG_HIDDEN);
+    const bool on = LedFeedback_enabled();
+    lv_label_set_text(lv_obj_get_child(g_ledButton, 0), on ? "On" : "Off");
+    lv_obj_set_style_bg_color(g_ledButton, on ? UI_COL_ACCENT : UI_COL_SURFACE_ALT, 0);
+}
+
+void onLedToggle(lv_event_t *)
+{
+    LedFeedback_setEnabled(!LedFeedback_enabled());
+    refreshLed();
 }
 
 void slideTo(int32_t y, lv_anim_completed_cb_t done)
@@ -124,10 +242,36 @@ void onRest(lv_event_t *)
     }
 }
 
+// This panel's screen and nothing else: the PC and its monitors are left as they are. A touch brings it back.
 void onScreenOff(lv_event_t *)
 {
     Drawer_close();
     Rest_screenOff();
+}
+
+// Two different things go by "PC off", and one of them cannot be undone from here, so the tile asks which. What each
+// does, to the PC and to this panel, is in App/PcPower.h: the same code answers another panel asking over the network.
+void onPcOff(lv_event_t *)
+{
+    Drawer_close();
+    if (!LinkServer_connected())
+    {
+        Notify(NotifySeverity::Warn, "drawer", "PC", "No PC is linked");
+        return;
+    }
+    std::vector<ListEntry> entries(2);
+    entries[0].label = "Monitors off";
+    entries[0].detail = "The PC keeps running. A key, the mouse or a touch here turns them back on.";
+    entries[0].dot = false;
+    entries[1].label = "Sleep";
+    entries[1].detail = "Suspends the PC. It has to be woken at the PC.";
+    entries[1].dot = false;
+    Modal_list("PC off", entries, [](size_t index) {
+        if (!(index == 0 ? PcPower_monitorsOff() : PcPower_sleep()))
+        {
+            Notify(NotifySeverity::Warn, "drawer", "PC", "No PC is linked");
+        }
+    });
 }
 
 void onSettings(lv_event_t *)
@@ -324,14 +468,50 @@ void Drawer_create()
     lv_obj_add_event_cb(g_panel, onPanelPress, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(g_panel, onPanelRelease, LV_EVENT_RELEASED, nullptr);
 
-    lv_obj_t *tiles = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, 2 * kTileH + 14);
-    lv_obj_set_flex_flow(tiles, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_t *tiles = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, 2 * kTileH + 14);    lv_obj_set_flex_flow(tiles, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_style_pad_gap(tiles, 14, 0);
     g_light = makeTile(tiles, UI_ICON_BULB, "Light", onLight);
     g_ac = makeTile(tiles, UI_ICON_SNOWFLAKE, "AC", onAc);
     g_rest = makeTile(tiles, LV_SYMBOL_POWER, "Rest", onRest);
     g_screenOff = makeTile(tiles, LV_SYMBOL_EYE_CLOSE, "Screen off", onScreenOff);
+    g_pcOff = makeTile(tiles, LV_SYMBOL_KEYBOARD, "PC off", onPcOff);
     makeTile(tiles, LV_SYMBOL_SETTINGS, "Settings", onSettings);
+
+    // Sherlock: tap to switch its strip; the bar is the strip's colour, the text its temperature and humidity.
+    g_sherlock = lv_obj_create(g_panel);
+    lv_obj_remove_style_all(g_sherlock);
+    lv_obj_set_size(g_sherlock, 3 * kTileW + 2 * 14, kCardH); // exactly as wide as the three tile columns
+    lv_obj_set_style_radius(g_sherlock, 16, 0);
+    lv_obj_set_style_bg_color(g_sherlock, UI_COL_SURFACE_ALT, 0);
+    lv_obj_set_style_bg_opa(g_sherlock, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(g_sherlock, UI_COL_SURFACE_HI, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_hor(g_sherlock, 20, 0);
+    lv_obj_set_style_pad_gap(g_sherlock, 18, 0);
+    lv_obj_add_flag(g_sherlock, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(g_sherlock, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(g_sherlock, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(g_sherlock, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_add_event_cb(g_sherlock, onSherlock, LV_EVENT_CLICKED, nullptr);
+    g_sherlockIcon = Theme_label(g_sherlock, UI_ICON_BED, UI_FONT_XL, UI_COL_TEXT_DIM);
+
+    lv_obj_t *info = lv_obj_create(g_sherlock);
+    lv_obj_remove_style_all(info);
+    lv_obj_set_size(info, 120, LV_SIZE_CONTENT);
+    lv_obj_remove_flag(info, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_flex_flow(info, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(info, 8, 0);
+    g_sherlockTitle = Theme_label(info, "Sherlock", UI_FONT_M, UI_COL_TEXT);
+    g_sherlockBar = lv_obj_create(info);
+    lv_obj_remove_style_all(g_sherlockBar);
+    lv_obj_set_size(g_sherlockBar, 110, 8);
+    lv_obj_set_style_radius(g_sherlockBar, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(g_sherlockBar, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(g_sherlockBar, LV_OBJ_FLAG_CLICKABLE);
+
+    g_sherlockSensors = Theme_label(g_sherlock, "", UI_FONT_L, UI_COL_TEXT);
+    lv_obj_set_flex_grow(g_sherlockSensors, 1);
+    lv_obj_set_style_text_align(g_sherlockSensors, LV_TEXT_ALIGN_RIGHT, 0);
+    refreshSherlock();
 
     lv_obj_t *row = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, 48);
     lv_obj_set_style_pad_gap(row, 16, 0);
@@ -347,6 +527,16 @@ void Drawer_create()
     lv_obj_add_event_cb(g_slider, onBrightness, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(g_slider, [](lv_event_t *) { Prefs_commit(); }, LV_EVENT_RELEASED, nullptr);
     g_sliderValue = Theme_label(row, "", UI_FONT_M, UI_COL_TEXT);
+
+    // The LED strip: it shows status (boot, Wi-Fi, Stackport alerts), so the only choice here is on or off.
+    g_ledRow = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, 52);
+    lv_obj_set_style_pad_gap(g_ledRow, 12, 0);
+    lv_obj_set_flex_align(g_ledRow, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *ledLabel = Theme_label(g_ledRow, "LED feedback", UI_FONT_M, UI_COL_TEXT_DIM);
+    lv_obj_set_width(ledLabel, 160);
+    g_ledButton = Theme_button(g_ledRow, "On", 96, 44);
+    lv_obj_add_event_cb(g_ledButton, onLedToggle, LV_EVENT_CLICKED, nullptr);
+    refreshLed();
 
     g_timer = lv_timer_create([](lv_timer_t *) { refresh(); }, 400, nullptr);
     lv_timer_pause(g_timer);

@@ -14,4 +14,4 @@ Regenerate (needs Node; run from LVGL's `scripts/built_in_font` so the .ttf / .w
       --font FontAwesome5-Solid+Brands+Regular.woff -r <decimal code points, see built_in_font_gen.py `syms`, plus 62172,61675,62763,62762,62306> \
       --format lvgl --force-fast-kern-format --lv-font-name font_ui_$s -o font_ui_$s.c
 
-`font_clock_200.c` is the big clock (digits and colon only). `img_mw_logo.c` is the MW monogram as an 8-bit alpha mask.
+`font_clock_200.c` is the big clock (digits and colon only). `img_mw_logo.c` is the MW monogram, 400x400 opaque RGB565, white and orange halves at 22 % brightness (it only sits on the black rest screen). Rendered from `mainsite/mattediworks/public/favicon.svg`: the orange half is `#ff9849`, the other half is white.
