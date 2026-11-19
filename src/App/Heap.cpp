@@ -2,6 +2,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "heap";
 
@@ -12,7 +13,16 @@ size_t Heap_internalFree()
 
 size_t Heap_internalLargest()
 {
-    return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    // This one walks every block of the internal heap with the heap lock held. It is timed because a slow walk starves the
+    // other tasks (the task watchdog fired with the LVGL task inside it); any call over 20 ms is logged.
+    const int64_t start = esp_timer_get_time();
+    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const int64_t took = esp_timer_get_time() - start;
+    if (took > 20000)
+    {
+        ESP_LOGW(TAG, "heap walk took %d ms", static_cast<int>(took / 1000));
+    }
+    return largest;
 }
 
 size_t Heap_internalMinFree()

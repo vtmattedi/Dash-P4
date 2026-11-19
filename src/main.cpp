@@ -14,6 +14,7 @@
 #include "board.h"
 #include "App/App.h"
 #include "App/Heap.h"
+#include "App/Diag.h"
 #include "App/MicTest.h"
 #include "App/Net.h"
 #include "App/Prefs.h"
@@ -68,6 +69,7 @@ extern "C" void app_main(void)
     {
         App_begin();
         Ui_begin(board_lvgl_display());
+        Diag_begin();
         Rest_begin();
         board_lvgl_unlock();
         ESP_LOGI(TAG, "UI built");

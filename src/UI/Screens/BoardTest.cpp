@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 
+#include "UI/Theme.h"
 #include "board.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -84,7 +85,7 @@ lv_obj_t *BoardTest_create(lv_obj_t *parent)
     lv_obj_t *root = lv_obj_create(parent);
     lv_obj_remove_style_all(root);
     lv_obj_set_size(root, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x000000), 0);
+    Theme_bgColor(root, lv_color_hex(0x000000));
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
     lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -99,7 +100,7 @@ lv_obj_t *BoardTest_create(lv_obj_t *parent)
         lv_obj_remove_style_all(bar);
         lv_obj_set_size(bar, barW, 140);
         lv_obj_set_pos(bar, i * barW, 0);
-        lv_obj_set_style_bg_color(bar, lv_color_hex(bars[i]), 0);
+        Theme_bgColor(bar, lv_color_hex(bars[i]));
         lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
     }
 
@@ -108,9 +109,9 @@ lv_obj_t *BoardTest_create(lv_obj_t *parent)
     lv_obj_remove_style_all(g_test.pad);
     lv_obj_set_size(g_test.pad, BOARD_LCD_H_RES - 360, BOARD_LCD_V_RES - 140);
     lv_obj_set_pos(g_test.pad, 0, 140);
-    lv_obj_set_style_bg_color(g_test.pad, lv_color_hex(0x10141B), 0);
+    Theme_bgColor(g_test.pad, lv_color_hex(0x10141B));
     lv_obj_set_style_bg_opa(g_test.pad, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(g_test.pad, lv_color_hex(0x2A3441), 0);
+    Theme_borderColor(g_test.pad, lv_color_hex(0x2A3441));
     lv_obj_set_style_border_width(g_test.pad, 2, 0);
     lv_obj_remove_flag(g_test.pad, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(g_test.pad, onPadTouch, LV_EVENT_PRESSED, nullptr);
@@ -119,7 +120,7 @@ lv_obj_t *BoardTest_create(lv_obj_t *parent)
 
     g_test.touchLabel = lv_label_create(g_test.pad);
     lv_label_set_text(g_test.touchLabel, "touch the pad");
-    lv_obj_set_style_text_color(g_test.touchLabel, lv_color_hex(0xE8EDF5), 0);
+    Theme_textColor(g_test.touchLabel, lv_color_hex(0xE8EDF5));
     lv_obj_set_style_text_font(g_test.touchLabel, &lv_font_montserrat_20, 0);
     lv_obj_align(g_test.touchLabel, LV_ALIGN_TOP_LEFT, 16, 12);
 
@@ -127,7 +128,7 @@ lv_obj_t *BoardTest_create(lv_obj_t *parent)
     lv_obj_remove_style_all(g_test.dot);
     lv_obj_set_size(g_test.dot, 28, 28);
     lv_obj_set_style_radius(g_test.dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(g_test.dot, lv_color_hex(0xFF9849), 0);
+    Theme_bgColor(g_test.dot, lv_color_hex(0xFF9849));
     lv_obj_set_style_bg_opa(g_test.dot, LV_OPA_COVER, 0);
     lv_obj_add_flag(g_test.dot, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(g_test.dot, LV_OBJ_FLAG_EVENT_BUBBLE);
@@ -141,7 +142,7 @@ lv_obj_t *BoardTest_create(lv_obj_t *parent)
     lv_obj_remove_flag(side, LV_OBJ_FLAG_SCROLLABLE);
 
     g_test.backlightLabel = lv_label_create(side);
-    lv_obj_set_style_text_color(g_test.backlightLabel, lv_color_hex(0xE8EDF5), 0);
+    Theme_textColor(g_test.backlightLabel, lv_color_hex(0xE8EDF5));
     lv_obj_set_style_text_font(g_test.backlightLabel, &lv_font_montserrat_20, 0);
     lv_label_set_text_fmt(g_test.backlightLabel, "backlight  %d / 255", board_get_backlight());
     lv_obj_align(g_test.backlightLabel, LV_ALIGN_TOP_LEFT, 20, 20);
@@ -155,7 +156,7 @@ lv_obj_t *BoardTest_create(lv_obj_t *parent)
     lv_obj_add_event_cb(slider, onBacklight, LV_EVENT_VALUE_CHANGED, nullptr);
 
     g_test.memLabel = lv_label_create(side);
-    lv_obj_set_style_text_color(g_test.memLabel, lv_color_hex(0x8A97A8), 0);
+    Theme_textColor(g_test.memLabel, lv_color_hex(0x8A97A8));
     lv_obj_set_style_text_font(g_test.memLabel, &lv_font_montserrat_16, 0);
     lv_obj_align(g_test.memLabel, LV_ALIGN_TOP_LEFT, 20, 140);
     refreshMemory(nullptr);
