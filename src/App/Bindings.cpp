@@ -18,9 +18,12 @@ struct RoleInfo
 // Same keys as the older panel, so an upgraded unit keeps its configuration.
 const RoleInfo kRoles[static_cast<int>(Role::Count)] = {
     {"ac_host", nullptr, nullptr, "AC", ""},
-    {"light_host", "light_res", nullptr, "Light", "light"},
-    {"rgb_host", "rgb_res", nullptr, "RGB", "rgb"},
-    {"door_device", "door_key", "door_invert", "Door", ""},
+    // One device is the light and its door sensor: `light` and `door` are fixed names, so only the device is chosen.
+    {"light_host", nullptr, nullptr, "Light + Door", ""},
+    // The bed light is a whole device (Sherlock): `led:power` and `led:color`.
+    {"rgb_host", nullptr, nullptr, "BedLED", ""},
+    // Follows the Light + Door device; kept as its own entry for the polarity and so TARGET DOOR can still override it.
+    {"door_device", "door_key", "door_invert", "Door", "door"},
     {"rest_device", "rest_key", nullptr, "Resting corner", ""},
 };
 
@@ -57,6 +60,13 @@ void Bindings_load()
         b.resource = i.resourceKey ? PersistentSettings.get(i.resourceKey, i.defaultResource) : std::string();
         b.invert = i.invertKey && PersistentSettings.get(i.invertKey, "0") == "1";
     }
+    // A unit upgraded from separate light and door bindings: the door follows the light's device.
+    if (!g_bindings[static_cast<int>(Role::Light)].device.empty())
+    {
+        Binding &door = g_bindings[static_cast<int>(Role::Door)];
+        door.device = g_bindings[static_cast<int>(Role::Light)].device;
+        door.resource = kRoles[static_cast<int>(Role::Door)].defaultResource;
+    }
     ++g_revision;
 }
 
@@ -92,6 +102,11 @@ void Bindings_set(Role role, const std::string &device, const std::string &resou
     }
     persist(role);
     ++g_revision;
+    if (role == Role::Light)
+    {
+        // The door sensor is on the same device as the light.
+        Bindings_set(Role::Door, device, std::string(), g_bindings[static_cast<int>(Role::Door)].invert);
+    }
 }
 
 void Bindings_clear(Role role)

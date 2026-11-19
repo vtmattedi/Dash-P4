@@ -119,19 +119,19 @@ void refresh(Ctx *c)
         if (!s)
         {
             Theme_setText(c->value, "no value yet");
-            lv_obj_set_style_text_color(c->value, UI_COL_TEXT_FAINT, 0);
+            Theme_textColor(c->value, UI_COL_TEXT_FAINT);
             Theme_setText(c->age, "the device has not published this resource's state");
         }
         else if (s->withdrawn)
         {
             Theme_setText(c->value, "withdrawn");
-            lv_obj_set_style_text_color(c->value, UI_COL_WARN, 0);
+            Theme_textColor(c->value, UI_COL_WARN);
             Theme_setText(c->age, "the owner published an empty state");
         }
         else
         {
             Theme_setText(c->value, Explorer_display(c->type, s->value, 200).c_str());
-            lv_obj_set_style_text_color(c->value, UI_COL_TEXT, 0);
+            Theme_textColor(c->value, UI_COL_TEXT);
             char age[24], line[96];
             Theme_formatAge(nowMs() - s->lastSeenMs, age, sizeof(age));
             snprintf(line, sizeof(line), "%s   %s%s", age, s->retained ? "retained" : "live",
@@ -412,7 +412,7 @@ void ResourcePage_open(const std::string &device, const std::string &resource)
     if (isValue)
     {
         lv_obj_t *card = Theme_card(body, lv_pct(100), LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_color(card, UI_COL_BG, 0);
+        Theme_bgColor(card, UI_COL_BG);
         c->value = Theme_label(card, "", UI_FONT_XL, UI_COL_TEXT);
         lv_obj_set_width(c->value, lv_pct(100));
         lv_label_set_long_mode(c->value, LV_LABEL_LONG_WRAP);
@@ -506,16 +506,8 @@ void ResourcePage_open(const std::string &device, const std::string &resource)
         Theme_label(body, "Use on this panel", UI_FONT_S, UI_COL_TEXT_DIM);
         lv_obj_t *row = wrapRow(body);
         const std::string dev = device, res = resource;
-        if (c->type == ValueType::Boolean)
-        {
-            button(row, "Light", 130, Tone::Neutral, [dev, res] { Bind_apply(Role::Light, dev, res); });
-            button(row, "Door sensor", 170, Tone::Neutral, [dev, res] { Bind_apply(Role::Door, dev, res); });
-        }
-        if (c->type == ValueType::Integer || c->type == ValueType::Colour)
-        {
-            button(row, "Colour light", 170, Tone::Neutral, [dev, res] { Bind_apply(Role::Rgb, dev, res); });
-        }
-        button(row, "Resting corner", 190, Tone::Neutral, [dev, res] { Bind_apply(Role::Rest, dev, res); });
+        button(row, "Light + Door", 190, Tone::Neutral, [dev] { Bind_apply(Role::Light, dev, ""); });
+        button(row, "BedLED", 130, Tone::Neutral, [dev] { Bind_apply(Role::Rgb, dev, ""); });
         button(row, "This device is the AC", 260, Tone::Neutral, [dev] { Bind_apply(Role::Ac, dev, ""); });
     }
 

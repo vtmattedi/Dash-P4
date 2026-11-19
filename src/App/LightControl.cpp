@@ -10,74 +10,23 @@ namespace
 {
 // Static storage: the resource manager keeps non-owning pointers for the life of the panel.
 RemoteState<bool> light{"light"};
-RemoteState<uint32_t> rgb{"rgb"};
+// The bed light is a whole device (Sherlock) addressed by two fixed resources; brightness is left to the device.
+RemoteState<bool> bedPower{"led:power"};
+RemoteState<ColourType> bedColour{"led:color"};
+const char *const kLightResource = "light";
+const char *const kBedPowerResource = "led:power";
+const char *const kBedColourResource = "led:color";
 
-std::string g_appliedLightDevice, g_appliedLightResource;
-std::string g_appliedRgbDevice, g_appliedRgbResource;
+std::string g_appliedLightDevice, g_appliedBedDevice;
 bool g_applied = false;
 
-// The colour and level last chosen here. Not the truth -- the device is -- but what "on"
-// should restore and what the wheel should open on, neither of which a published 0 can answer.
+// The colour last chosen here, so "on" and the wheel have something to show before the device has reported one.
 uint32_t g_chosenColour = 0xFFFFFF;
-uint8_t g_chosenBrightness = 255;
 
-uint8_t channelMax(uint32_t colour)
+uint32_t publishedColour()
 {
-    const uint8_t r = (colour >> 16) & 0xFF;
-    const uint8_t g = (colour >> 8) & 0xFF;
-    const uint8_t b = colour & 0xFF;
-    const uint8_t rg = r > g ? r : g;
-    return rg > b ? rg : b;
-}
-
-// Scale a colour so its largest channel reads 255: the hue with the brightness taken back out
-// of it. Black has no hue to recover.
-uint32_t normalise(uint32_t colour)
-{
-    const uint8_t peak = channelMax(colour);
-    if (peak == 0)
-    {
-        return 0;
-    }
-    const uint32_t r = (((colour >> 16) & 0xFF) * 255u + peak / 2) / peak;
-    const uint32_t g = (((colour >> 8) & 0xFF) * 255u + peak / 2) / peak;
-    const uint32_t b = ((colour & 0xFF) * 255u + peak / 2) / peak;
-    return (r << 16) | (g << 8) | b;
-}
-
-uint32_t scale(uint32_t colour, uint8_t level)
-{
-    const uint32_t r = (((colour >> 16) & 0xFF) * level + 127) / 255;
-    const uint32_t g = (((colour >> 8) & 0xFF) * level + 127) / 255;
-    const uint32_t b = ((colour & 0xFF) * level + 127) / 255;
-    return (r << 16) | (g << 8) | b;
-}
-
-uint32_t published()
-{
-    return rgb.hasValue() ? (rgb.getValue() & 0x00FFFFFF) : 0;
-}
-
-// Fold whatever the owner last reported back into the local choice, so the wheel and the
-// slider follow a change made elsewhere -- another panel, a console, the device itself.
-void adoptPublished()
-{
-    const uint32_t value = published();
-    if (value == 0)
-    {
-        return; // Off says nothing about which colour or how bright.
-    }
-    g_chosenColour = normalise(value);
-    g_chosenBrightness = channelMax(value);
-}
-
-bool publish(uint32_t colour)
-{
-    if (!Rgb_bound())
-    {
-        return false;
-    }
-    return rgb.setValue(colour & 0x00FFFFFF);
+    const NightMare::RGB c = bedColour.getValue().toRGB();
+    return (static_cast<uint32_t>(c.r) << 16) | (static_cast<uint32_t>(c.g) << 8) | c.b;
 }
 } // namespace
 
@@ -85,27 +34,26 @@ void LightControl_begin()
 {
     // Bound before a source is known: registered now, subscribed once a source is supplied.
     gResourcesManager.bindResource(&light);
-    gResourcesManager.bindResource(&rgb);
+    gResourcesManager.bindResource(&bedPower);
+    gResourcesManager.bindResource(&bedColour);
 }
 
 void LightControl_applyBindings()
 {
-    const Binding &l = Bindings_get(Role::Light);
-    const Binding &c = Bindings_get(Role::Rgb);
-    // Each half is retargeted only when its own address moved: setSource() drops everything
-    // learned from the old source, and a needless one would blank a card until the broker
-    // replayed the retained state.
-    if (!g_applied || l.device != g_appliedLightDevice || l.resource != g_appliedLightResource)
+    const std::string &lightDevice = Bindings_get(Role::Light).device;
+    const std::string &bedDevice = Bindings_get(Role::Rgb).device;
+    // Each half is retargeted only when its own device moved: setSource() drops everything learned from the old
+    // source, and a needless one would blank a card until the broker replayed the retained state.
+    if (!g_applied || lightDevice != g_appliedLightDevice)
     {
-        g_appliedLightDevice = l.device;
-        g_appliedLightResource = l.resource;
-        light.setSource(l.device, l.resource);
+        g_appliedLightDevice = lightDevice;
+        light.setSource(lightDevice, kLightResource);
     }
-    if (!g_applied || c.device != g_appliedRgbDevice || c.resource != g_appliedRgbResource)
+    if (!g_applied || bedDevice != g_appliedBedDevice)
     {
-        g_appliedRgbDevice = c.device;
-        g_appliedRgbResource = c.resource;
-        rgb.setSource(c.device, c.resource);
+        g_appliedBedDevice = bedDevice;
+        bedPower.setSource(bedDevice, kBedPowerResource);
+        bedColour.setSource(bedDevice, kBedColourResource);
     }
     g_applied = true;
 }
@@ -115,13 +63,19 @@ void LightControl_mirrorToRegistry()
     const uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000);
     if (Bindings_configured(Role::Light) && light.hasValue())
     {
-        Registry_noteValue(Bindings_get(Role::Light).device, Bindings_get(Role::Light).resource,
-                           light.getValue() ? "true" : "false", now);
+        Registry_noteValue(Bindings_get(Role::Light).device, kLightResource, light.getValue() ? "true" : "false", now);
     }
-    if (Rgb_bound() && rgb.hasValue())
+    if (Rgb_bound())
     {
-        Registry_noteValue(Bindings_get(Role::Rgb).device, Bindings_get(Role::Rgb).resource,
-                           std::to_string(published()), now);
+        const std::string &device = Bindings_get(Role::Rgb).device;
+        if (bedPower.hasValue())
+        {
+            Registry_noteValue(device, kBedPowerResource, bedPower.getValue() ? "true" : "false", now);
+        }
+        if (bedColour.hasValue())
+        {
+            Registry_noteValue(device, kBedColourResource, std::to_string(publishedColour()), now);
+        }
     }
 }
 
@@ -154,62 +108,43 @@ bool LightControl_toggle()
 
 bool Rgb_bound() { return Bindings_configured(Role::Rgb); }
 
-bool Rgb_hasState()
-{
-    return Rgb_bound() && rgb.hasValue() && !rgb.isStale();
-}
+bool Rgb_hasState() { return Rgb_bound() && bedPower.hasValue() && !bedPower.isStale(); }
 
-bool Rgb_on()
-{
-    return Rgb_hasState() && published() != 0;
-}
+bool Rgb_on() { return Rgb_hasState() && bedPower.getValue(); }
 
 uint32_t Rgb_colour()
 {
-    adoptPublished();
+    if (bedColour.hasValue())
+    {
+        const uint32_t value = publishedColour();
+        if (value != 0)
+        {
+            g_chosenColour = value;
+        }
+    }
     return g_chosenColour;
-}
-
-uint8_t Rgb_brightness()
-{
-    adoptPublished();
-    return g_chosenBrightness;
 }
 
 bool Rgb_setColour(uint32_t hex)
 {
-    const uint32_t hue = normalise(hex & 0x00FFFFFF);
-    if (hue == 0)
+    hex &= 0x00FFFFFF;
+    if (hex == 0)
     {
         // Picking black on the wheel means "off", not a colour of its own.
         return Rgb_setOn(false);
     }
-    g_chosenColour = hue;
-    return publish(scale(g_chosenColour, g_chosenBrightness));
-}
-
-bool Rgb_setBrightness(uint8_t level)
-{
-    g_chosenBrightness = level;
-    // Moving the slider on a light that is off leaves it off and sends nothing: brightness
-    // is how bright it will be when it comes on, not a command to switch it on.
+    if (!Rgb_bound())
+    {
+        return false;
+    }
+    g_chosenColour = hex;
+    bool ok = bedColour.setValue(
+        ColourType(static_cast<uint8_t>(hex >> 16), static_cast<uint8_t>(hex >> 8), static_cast<uint8_t>(hex)));
     if (!Rgb_on())
     {
-        return true;
+        ok = bedPower.setValue(true) && ok;
     }
-    return publish(scale(g_chosenColour, level));
+    return ok;
 }
 
-bool Rgb_setOn(bool on)
-{
-    if (!on)
-    {
-        // Remember what it was before going dark, so the next "on" restores it.
-        adoptPublished();
-        return publish(0);
-    }
-    // Never switch on into black: a brightness of zero would look like the command did nothing.
-    const uint8_t level = g_chosenBrightness ? g_chosenBrightness : 255;
-    g_chosenBrightness = level;
-    return publish(scale(g_chosenColour, level));
-}
+bool Rgb_setOn(bool on) { return Rgb_bound() && bedPower.setValue(on); }

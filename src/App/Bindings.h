@@ -14,10 +14,9 @@
 //   Ac     a whole device: the AC controller publishes a contract (ac_power,
 //          ac_temperature, ac_target, ac_state, ...) under names it chose, so naming
 //          the device addresses all of them. resource is unused.
-//   Light  one writable boolean resource.
-//   Rgb    one writable 24-bit colour resource.
-//   Door   a boolean resource that says whether a door is open. Reed switches report
-//          either polarity depending only on wiring, hence `invert`.
+//   Light  a whole device: its writable `light` boolean and its `door` sensor (Role::Door follows it).
+//   Rgb    a whole device (the bed light): `led:power` boolean and `led:color` colour.
+//   Door   says whether a door is open. Reed switches report either polarity depending only on wiring, hence `invert`.
 //   Rest   the resource shown in the resting screen's free corner.
 //
 // LVGL task only (decisions D20). Nothing here talks to the network: AcClient and

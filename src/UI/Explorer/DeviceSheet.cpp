@@ -383,7 +383,7 @@ void setResourceHeader(const Device &d)
         text += "   -   " + std::to_string(m->resources.size()) + " declared (manifest v" + std::to_string(m->manifestVersion) + ")";
     }
     Theme_setText(g.resourceHeader, text.c_str());
-    lv_obj_set_style_text_color(g.resourceHeader, colour, 0);
+    Theme_textColor(g.resourceHeader, colour);
 }
 
 void onResourceRow(lv_event_t *e)
@@ -406,7 +406,7 @@ void rebuildResources(const std::vector<ResourceRow> &rows)
         lv_obj_t *row = lv_obj_create(g.content);
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, lv_pct(100), 58);
-        lv_obj_set_style_bg_color(row, UI_COL_SURFACE, 0);
+        Theme_bgColor(row, UI_COL_SURFACE);
         lv_obj_set_style_bg_color(row, UI_COL_SURFACE_ALT, LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(row, 12, 0);
@@ -488,8 +488,8 @@ void refreshResources()
             dot = UI_COL_OK;
         }
         Theme_setText(g.valueLabels[i], text.c_str());
-        lv_obj_set_style_text_color(g.valueLabels[i], colour, 0);
-        lv_obj_set_style_bg_color(g.dots[i], dot, 0);
+        Theme_textColor(g.valueLabels[i], colour);
+        Theme_bgColor(g.dots[i], dot);
     }
 }
 
@@ -620,7 +620,7 @@ void buildConsole(lv_obj_t *root)
     });
 
     lv_obj_t *card = Theme_card(root, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(card, UI_COL_BG, 0);
+    Theme_bgColor(card, UI_COL_BG);
     lv_obj_set_style_min_height(card, 160, 0);
     g.consoleBusy = Theme_label(card, "waiting for the device...", UI_FONT_S, UI_COL_ACCENT);
     lv_obj_add_flag(g.consoleBusy, LV_OBJ_FLAG_HIDDEN);
@@ -703,7 +703,7 @@ void buildPing(lv_obj_t *root)
     lv_obj_set_size(g.pingChart, lv_pct(100), 220);
     lv_chart_set_type(g.pingChart, LV_CHART_TYPE_BAR);
     lv_chart_set_div_line_count(g.pingChart, 4, 0);
-    lv_obj_set_style_bg_color(g.pingChart, UI_COL_BG, 0);
+    Theme_bgColor(g.pingChart, UI_COL_BG);
     lv_obj_set_style_bg_opa(g.pingChart, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g.pingChart, 0, 0);
     lv_obj_set_style_line_color(g.pingChart, UI_COL_BORDER, LV_PART_MAIN);
@@ -793,8 +793,8 @@ void styleTabs()
     for (int i = 0; i < TabCount; ++i)
     {
         const bool active = (i == g.tab);
-        lv_obj_set_style_bg_color(g.tabButtons[i], active ? UI_COL_ACCENT : UI_COL_SURFACE_HI, 0);
-        lv_obj_set_style_text_color(g.tabButtons[i], active ? lv_color_hex(0x1A1208) : UI_COL_TEXT, 0);
+        Theme_bgColor(g.tabButtons[i], active ? UI_COL_ACCENT : UI_COL_SURFACE_HI);
+        Theme_textColor(g.tabButtons[i], active ? lv_color_hex(0x1A1208) : UI_COL_TEXT);
     }
 }
 

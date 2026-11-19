@@ -51,9 +51,9 @@ const char *noun(Role role)
     case Role::Ac:
         return "air conditioner";
     case Role::Light:
-        return "light";
+        return "light and door sensor";
     case Role::Rgb:
-        return "colour light";
+        return "bed light";
     case Role::Door:
         return "door sensor";
     default:
@@ -64,13 +64,18 @@ const char *noun(Role role)
 void finish(Role role, const std::string &device, const std::string &resource, bool invert)
 {
     Bindings_set(role, device, resource, invert);
-    const std::string what = role == Role::Ac ? device : device + " / " + resource;
+    const std::string what = resource.empty() ? device : device + " / " + resource;
     Notify(NotifySeverity::Ok, "bindings", std::string(Bindings_label(role)) + " bound", what);
 }
 } // namespace
 
 void Bind_apply(Role role, const std::string &device, const std::string &resource)
 {
+    if (role == Role::Ac || role == Role::Light || role == Role::Rgb)
+    {
+        finish(role, device, std::string(), false); // whole-device roles: the resource names are fixed
+        return;
+    }
     if (role != Role::Door)
     {
         finish(role, device, resource, false);
@@ -147,6 +152,22 @@ void Bind_chooseFor(Role role)
     std::stable_sort(devices.begin(), devices.end(),
                      [](const Device *a, const Device *b) { return a->online && !b->online; });
 
+    // Devices that publish what the role needs come first. The AC has a contract of its own and is not checked.
+    auto has = [](const Device *d, const char *resource) { return d->resources.find(resource) != d->resources.end(); };
+    auto suits = [&](const Device *d) {
+        switch (role)
+        {
+        case Role::Rgb:
+            return has(d, "led:power") && has(d, "led:color");
+        case Role::Light:
+            return has(d, "light");
+        default:
+            return false;
+        }
+    };
+    std::stable_sort(devices.begin(), devices.end(),
+                     [&](const Device *a, const Device *b) { return suits(a) && !suits(b); });
+
     std::vector<ListEntry> entries;
     std::vector<std::string> names;
     for (const Device *d : devices)
@@ -154,7 +175,7 @@ void Bind_chooseFor(Role role)
         ListEntry e;
         e.label = d->name;
         e.detail = std::to_string(d->resources.size()) + " resources" + (d->online ? "" : "  -  offline");
-        e.tone = d->online ? Tone::Ok : Tone::Neutral;
+        e.tone = (suits(d) || (role == Role::Ac && d->online)) ? Tone::Ok : Tone::Neutral;
         entries.push_back(e);
         names.push_back(d->name);
     }
@@ -164,9 +185,9 @@ void Bind_chooseFor(Role role)
                    {
                        return;
                    }
-                   if (role == Role::Ac)
+                   if (role == Role::Ac || role == Role::Light || role == Role::Rgb)
                    {
-                       finish(role, names[index], "", false);
+                       Bind_apply(role, names[index], "");
                    }
                    else
                    {
