@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 #include "esp_err.h"
 #include "esp_lcd_types.h"
@@ -26,6 +27,16 @@ uint8_t board_get_backlight(void);
 /// Copy a packed full-screen RGB565 image (BOARD_LCD_H_RES x BOARD_LCD_V_RES) into the panel. Waits for the
 /// previous copy first; returns once this one has started (the buffer is read until the next call or
 /// board_display_wait_idle() returns).
+typedef struct {
+    uint32_t copies;      // frame-buffer copies finished since boot
+    uint32_t timeouts;    // copies that did not report completion in time
+    uint32_t slow_copies; // copies that took more than 30 ms
+    uint32_t max_copy_us; // the slowest copy since the last reset
+} board_display_stats_t;
+
+/// How the panel's frame copies are going; `reset_max` restarts max_copy_us.
+void board_display_stats(board_display_stats_t *out, bool reset_max);
+
 esp_err_t board_display_draw_frame(const void *rgb565, uint16_t width, uint16_t height);
 /// Wait until no copy is running.
 esp_err_t board_display_wait_idle(void);

@@ -15,6 +15,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include <string.h>
+#include "esp_timer.h"
 
 static const char *TAG = "board_display";
 
@@ -31,6 +32,10 @@ static bool s_backlight_ready;
 static SemaphoreHandle_t s_copy_idle;
 static board_display_done_hook_t s_done_hook;
 static void *s_done_ctx;
+
+// Frame-copy statistics for finding display glitches (read with board_display_stats()).
+static volatile int64_t s_copy_started_us;
+static volatile uint32_t s_copies, s_timeouts, s_max_copy_us, s_slow_copies;
 // A copy of 1024x600x2 bytes PSRAM to PSRAM takes a few ms; this only catches a lost interrupt.
 #define COPY_TIMEOUT_MS 200
 
@@ -39,6 +44,17 @@ static bool onCopyDone(esp_lcd_panel_handle_t panel, esp_lcd_dpi_panel_event_dat
     (void)panel;
     (void)edata;
     (void)ctx;
+    const int64_t started = s_copy_started_us;
+    if (started) {
+        const uint32_t took = (uint32_t)(esp_timer_get_time() - started);
+        if (took > s_max_copy_us) {
+            s_max_copy_us = took;
+        }
+        if (took > 30000) {
+            s_slow_copies++; // a copy that should take a few ms took more than 30
+        }
+    }
+    s_copies++;
     BaseType_t woken = pdFALSE;
     xSemaphoreGiveFromISR(s_copy_idle, &woken);
     if (s_done_hook) {
@@ -56,6 +72,17 @@ esp_err_t board_display_claim_done_callback(board_display_done_hook_t hook, void
     return esp_lcd_dpi_panel_register_event_callbacks(s_panel, &cbs, NULL);
 }
 
+void board_display_stats(board_display_stats_t *out, bool reset_max)
+{
+    out->copies = s_copies;
+    out->timeouts = s_timeouts;
+    out->slow_copies = s_slow_copies;
+    out->max_copy_us = s_max_copy_us;
+    if (reset_max) {
+        s_max_copy_us = 0;
+    }
+}
+
 esp_err_t board_display_draw_frame(const void *rgb565, uint16_t width, uint16_t height)
 {
     ESP_RETURN_ON_FALSE(s_panel && s_copy_idle, ESP_ERR_INVALID_STATE, TAG, "display not initialised");
@@ -64,7 +91,9 @@ esp_err_t board_display_draw_frame(const void *rgb565, uint16_t width, uint16_t 
     if (xSemaphoreTake(s_copy_idle, pdMS_TO_TICKS(COPY_TIMEOUT_MS)) != pdTRUE) {
         // The panel's own guard still refuses an overlapping copy; carry on and let it decide.
         ESP_LOGW(TAG, "previous frame copy did not report completion");
+        s_timeouts++;
     }
+    s_copy_started_us = esp_timer_get_time();
     esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, width, height, rgb565);
     if (err != ESP_OK) {
         xSemaphoreGive(s_copy_idle); // nothing started, so nothing will give it back
