@@ -35,9 +35,12 @@ class Link:
         token: str,
         name: str,
         window=None,
-        media=None,  # control only (media keys); v0 does not report what is playing
+        media=None,  # control (media keys); .get(), when it has one, is reported as state `media` (what is playing)
         call=None,  # microphone / call: .get() is reported as state `call`, .mic(mode) is an action
         display=None,  # the monitor: .state ("on"/"off"/"dim"/None) is reported, .wake() is an action
+        pc=None,       # open windows, unread counts and vitals: .snapshot() is reported, .focus(id) is an action
+        recent=None,  # recent.RecentFolders: .entries() is reported
+        launchers=None,  # names the panel may start (launchers.Launchers): .names() is reported
         runner: ActionRunner | None = None,
         port: int = protocol.DEFAULT_PORT,
         window_poll_s: float = 0.5,
@@ -45,7 +48,8 @@ class Link:
     ) -> None:
         self.host, self.port, self.token, self.name = host, port, token, name
         self.window, self.media, self.display, self.call = window, media, display, call
-        self.runner = runner or ActionRunner(media=media, display=display, call=call)
+        self.pc, self.launchers, self.recent = pc, launchers, recent
+        self.runner = runner or ActionRunner(media=media, display=display, call=call, pc=pc, launchers=launchers, recent=recent)
         self.window_poll_s = window_poll_s
         self.connect_timeout_s = connect_timeout_s
         self.connected = asyncio.Event()  # set while a session is up (tests and the CLI use it)
@@ -129,7 +133,7 @@ class Link:
         if kind != protocol.CHALLENGE or "nonce" not in challenge:
             raise LinkError("the panel did not start with a challenge")
         self.panel = challenge
-        caps = (["window"] if self.window else []) + (["display"] if self.display else []) + (["call"] if self.call else []) + self.runner.capabilities()
+        caps = (["window"] if self.window else []) + (["display"] if self.display else []) + (["call"] if self.call else []) + (["media_info"] if getattr(self.media, "get", None) else []) + (["badges"] if self.pc else []) + self.runner.capabilities()
         await send(
             protocol.HELLO,
             {
@@ -247,6 +251,10 @@ class Link:
         last_window: object = object()  # nothing sent yet: the first reading always goes out
         last_display: object = object()
         last_call: object = object()
+        last_media: object = object()
+        last_launchers: object = object()
+        last_recent: object = object()
+        last_pc: dict = {}
         tick = 0
         while True:
             changed: dict = {}
@@ -266,6 +274,26 @@ class Link:
                 if current != last_call:
                     last_call = current
                     changed["call"] = current
+            if getattr(self.media, "get", None) is not None:
+                current = await self.media.get()
+                if current != last_media:
+                    last_media = current
+                    changed["media"] = current
+            if self.pc is not None and tick % 4 == 0:  # windows and vitals: every two seconds, and only what changed
+                for key, value in (await self.pc.snapshot()).items():
+                    if last_pc.get(key, object()) != value:
+                        last_pc[key] = value
+                        changed[key] = value
+            if self.launchers is not None and tick % 4 == 0:
+                deck = self.launchers.deck()
+                if deck != last_launchers:
+                    last_launchers = deck
+                    changed["launchers"] = deck
+            if self.recent is not None and tick % 4 == 0:
+                recent = self.recent.entries()
+                if recent != last_recent:
+                    last_recent = recent
+                    changed["recent"] = recent
             tick += 1
             if changed:
                 await send(protocol.STATE, changed)

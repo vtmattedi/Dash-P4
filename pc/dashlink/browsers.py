@@ -89,7 +89,7 @@ def chrome_path() -> str | None:
     return None
 
 
-def open_in_browser(url: str, browser: str = "default", linear_app: bool = True) -> str:
+def open_in_browser(url: str, browser: str = "default", linear_app: bool = True, profile: str | None = None) -> str:
     """Open `url`. Returns a short note about what was used (shown on the panel when it is not the obvious thing)."""
     app_url = linear_app_url(url) if linear_app else None
     if app_url and linear_app_installed():
@@ -101,7 +101,8 @@ def open_in_browser(url: str, browser: str = "default", linear_app: bool = True)
     if browser == "chrome":
         path = chrome_path()
         if path:
-            subprocess.Popen([path, url], close_fds=True)  # a list, no shell: the URL is never parsed by a shell
+            command = [path] + ([f"--profile-directory={profile}"] if profile else []) + [url]
+            subprocess.Popen(command, close_fds=True)  # a list, no shell: the URL is never parsed by a shell
             return ""
         webbrowser.open(url)
         return "Chrome not found: used the default browser"

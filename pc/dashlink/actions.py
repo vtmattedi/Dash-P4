@@ -44,6 +44,9 @@ class ActionRunner:
         media=None,
         display=None,
         call=None,
+        pc=None,
+        launchers=None,
+        recent=None,
         allow_hosts: Iterable[str] | None = None,
         opener: Callable[[str, str], object] = open_in_browser,
         clock: Callable[[], float] = time.monotonic,
@@ -52,6 +55,9 @@ class ActionRunner:
         self.media = media
         self.display = display
         self.call = call
+        self.pc = pc
+        self.launchers = launchers
+        self.recent = recent
         self.allow_hosts = list(allow_hosts or [])
         self.opener = opener
         self.clock = clock
@@ -65,6 +71,12 @@ class ActionRunner:
         if self.call is not None:
             caps.append("call")
             caps.append("mic")
+        if self.pc is not None:
+            caps += ["windows", "focus", "vitals"]
+        if self.launchers is not None:
+            caps.append("launch")
+        if self.recent is not None:
+            caps.append("recent")
         if self.display is not None:
             caps.append("wake_display")
             caps.append("sleep_display")
@@ -80,6 +92,12 @@ class ActionRunner:
                 return await self._media(args)
             if name == "mic":
                 return await self._mic(args)
+            if name == "focus":
+                return await self._focus(args)
+            if name == "launch":
+                return self._launch(args)
+            if name == "open_recent":
+                return self.recent.open(args.get("name")) if self.recent is not None else (False, "no VS Code list on this PC")
             if name == "wake_display":
                 return await self._wake_display()
             if name == "sleep_display":
@@ -121,6 +139,20 @@ class ActionRunner:
             return False, "no microphone control on this PC"
         done = await self.call.mic(mode)
         return (True, "") if done else (False, "could not change the microphone")
+
+    async def _focus(self, args: dict) -> tuple[bool, str]:
+        window_id = args.get("id")
+        if not isinstance(window_id, int) or isinstance(window_id, bool):
+            raise ValueError("window id missing")
+        if self.pc is None:
+            return False, "no window control on this PC"
+        done = await self.pc.focus(window_id)
+        return (True, "") if done else (False, "that window is gone")
+
+    def _launch(self, args: dict) -> tuple[bool, str]:
+        if self.launchers is None:
+            return False, "no launchers on this PC"
+        return self.launchers.launch(args.get("name"), args.get("item"))
 
     async def _wake_display(self) -> tuple[bool, str]:
         if self.display is None:

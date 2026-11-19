@@ -8,8 +8,11 @@
     display.suspend()       -> True if the PC is about to go to sleep         (async)
     call.get()              -> {"active": True, "app": str, "muted": bool} while an app records the microphone, else None (async)
     call.mic(mode)          -> True if the default microphone was muted / unmuted / toggled (async)
+    media.get()             -> {"title","artist","app","playing"} or None: what is playing (async; optional)
+    pc.snapshot()           -> {"windows": [...], "badges": [...], "vitals": {...}} (async)
+    pc.focus(window_id)     -> True if that window was brought to the front (async)
 
-v0 scope: Windows only, no now-playing metadata, no encryption. Linux/KDE (a KWin script over D-Bus, MPRIS) comes later;
+v0 scope: Windows only, no encryption. Linux/KDE (a KWin script over D-Bus, MPRIS) comes later;
 until then a Linux run only links, pings and runs actions.
 """
 
@@ -26,7 +29,9 @@ def create_providers():
     if sys.platform == "win32":
         from . import windows
 
-        return windows.WindowsWindowProvider(), windows.create_media_provider(), windows.create_display_provider()
+        from . import windows_media
+
+        return windows.WindowsWindowProvider(), windows_media.create_media_provider(), windows.create_display_provider()
     log.warning("no window/media/display provider for %s yet: linking only", sys.platform)
     return None, None, None
 
@@ -37,4 +42,13 @@ def create_call_provider():
         from . import windows_audio
 
         return windows_audio.create_call_provider()
+    return None
+
+
+def create_pc_provider():
+    """The PC-page provider: pc.snapshot() -> {"windows","badges","vitals"} (async); pc.focus(window_id) -> bool (async)."""
+    if sys.platform == "win32":
+        from . import windows_pc
+
+        return windows_pc.create_pc_provider()
     return None

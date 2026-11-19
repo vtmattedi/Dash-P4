@@ -18,7 +18,9 @@ from .browsers import open_in_browser
 from .client import Link
 from .control import DEFAULT_CONTROL_PORT, request_push, serve
 from .firmware import TARGETS, FirmwareError, default_path, load_image
-from .providers import create_call_provider, create_providers
+from .launchers import Launchers, default_path as default_launchers
+from .recent import RecentFolders
+from .providers import create_call_provider, create_pc_provider, create_providers
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
@@ -40,6 +42,8 @@ def main() -> None:
                         help="only open links on this domain (and its subdomains); repeatable. Default: any http/https link")
     parser.add_argument("--no-linear-app", action="store_true",
                         help="open Linear links in the browser even when the Linear desktop app is installed")
+    parser.add_argument("--launchers", type=Path, default=None, metavar="FILE",
+                        help=f"JSON list of things the panel may start by name (default {default_launchers()}); see launchers.py")
     parser.add_argument("--version", action="version", version=f"dashlink {__version__}")
     args = parser.parse_args()
     if not args.token:
@@ -48,9 +52,12 @@ def main() -> None:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     window, media, display = create_providers()
     call = create_call_provider()
-    runner = ActionRunner(media=media, display=display, call=call, allow_hosts=args.allow_host,
+    pc = create_pc_provider()
+    launchers = Launchers(args.launchers)
+    recent = RecentFolders()
+    runner = ActionRunner(media=media, display=display, call=call, pc=pc, launchers=launchers, recent=recent, allow_hosts=args.allow_host,
                           opener=functools.partial(open_in_browser, linear_app=not args.no_linear_app))
-    link = Link(args.host, args.token, args.name, window=window, media=media, display=display, call=call, runner=runner, port=args.port)
+    link = Link(args.host, args.token, args.name, window=window, media=media, display=display, call=call, pc=pc, launchers=launchers, recent=recent, runner=runner, port=args.port)
 
     async def run() -> None:
         server = await serve(link, args.control_port)

@@ -107,13 +107,43 @@ is "Meet" when the focused window's title says so, else "Browser"). `muted` is t
 every app shares and the PC can read back; an app's own mute button is not read. The panel drops the call state when the link
 drops.
 
+```json
+{"media": {"title": "Song", "artist": "Band", "app": "Spotify", "playing": true}}
+```
+
+`media` (capability `media_info`) is what Windows' media session says is playing (the same source as the volume flyout), sent whole
+when it changes; `null` means nothing is loaded. It comes from a long-lived Windows PowerShell the companion starts (the API is
+WinRT); without it the transport buttons still work through the media keys and nothing is reported.
+
+```json
+{"vitals": {"cpu": 13, "ram": 72, "ram_free": 8.7, "disk": 88, "gpu": 34, "gpu_temp": 48, "cpu_temp": 54, "temp": 28, "battery": 80, "charging": false}}
+```
+
+`vitals` (capability `vitals`) is sent whole about every two seconds, only when a value changed. `cpu`, `ram` (share used), `disk`
+(C:, share used) and `gpu` are percent; `ram_free` is GB; `gpu` and `gpu_temp` need an NVIDIA GPU (nvidia-smi). `cpu_temp` is
+the CPU's temperature and only exists while LibreHardwareMonitor or OpenHardwareMonitor runs on the PC (Windows has no built-in
+reading). Without one, `temp` is the hottest ACPI thermal zone, which is a chassis sensor and barely follows the load: the panel
+shows it as "Case", never as the CPU. `battery` (percent) and `charging` only exist on a PC with a battery.
+
+```json
+{"windows": [{"id": 263548, "app": "VS Code", "title": "x.py - Dash-P4 - Visual Studio Code", "ws": "Dash-P4"}],
+ "badges": [{"app": "Slack", "count": 3}], "launchers": [{"name": "Stackport PRs", "icon": "github"}]}
+```
+
+`windows` (capability `windows`) lists the open top-level windows (at most 16, editors first, then the rest in z-order; titles cut
+to 80 characters); `id` is the window handle and is what `focus` takes. `ws` tells windows of one app apart (a VS Code folder).
+`badges` are unread counts that apps put in their window titles ("(3) Slack", "Inbox (12) - Gmail"): Windows offers no way to read
+another app's taskbar badge. `launchers` (capability `launch`) are the entries of the PC's own launchers file: `name` (what `launch` takes) and `icon` (`vscode`, `github`, `trackfy` or empty: the panel draws the initial). A bare string is accepted as a name with no icon. `recent` (capability `recent`) is VS Code's recently opened folders, most recent first: `[{"name": "Trackfy", "where": "C:\\Users\\x"}]`; the `open_recent` action takes a `name` from it.
+
 ### Actions (panel -> PC)
 
 | `name` | `args` | Effect on the PC |
 |---|---|---|
 | `open_url` | `{"url":"https://...","browser":"chrome"}` (`browser` is `chrome` or `default`, optional) | Opens the URL in Chrome, or the default browser (also when Chrome is not found; the result says so). A `linear.app` link opens in the Linear desktop app (`linear://`) when it is installed. Only `http` and `https`, at most 2048 characters, no whitespace or control characters, and the host must pass the PC's allowlist when one is set. At most 5 per minute. |
-| `media` | `{"cmd":"play_pause\|next\|prev\|stop"}` | Presses the media key. (What is playing is not reported in v0.) |
+| `media` | `{"cmd":"play_pause\|next\|prev\|stop"}` | Presses the media key. What is playing is reported separately as state `media`. |
 | `mic` | `{"mode":"mute\|unmute\|toggle"}` | Sets the default communications microphone's mute flag (cap `mic`). The PC then reports `call.muted`. |
+| `focus` | `{"id": 263548}` | Brings that window to the front (cap `focus`). Only an `id` the PC listed in `windows` a moment ago works; anything else answers "that window is gone". |
+| `launch` | `{"name": "Stackport PRs"}` | Starts the launcher of that name (cap `launch`). The PC's launchers file (`%APPDATA%\dashlink\launchers.json`, or `--launchers`) says what it does: run a program with fixed arguments, or open a link; the panel only ever sends the name. |
 | `sleep_display` | none | Turns the monitors off (`SC_MONITORPOWER`; cap `sleep_display`). Any mouse or key input turns them back on. The panel sends it from the drawer's "PC off" tile ("Monitors off"); the PC then reports `display: "off"`. |
 | `sleep_pc` | none | Puts the PC to sleep (suspend, not hibernate; cap `sleep_pc`), about a second after answering, so the result gets out before the link drops. The panel sends it from the drawer's "PC off" tile ("Sleep"). The panel cannot wake the PC again: with the PC asleep there is no link. |
 | `wake_display` | none | Wakes a blanked monitor with a one-pixel mouse nudge (cap `wake_display`). It shows the lock screen if the PC is locked; it never unlocks it. The panel sends it when you touch the panel while the PC's monitor is off. |

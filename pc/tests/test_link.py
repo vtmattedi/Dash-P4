@@ -45,6 +45,35 @@ class StubCall:
         return True
 
 
+class StubPc:
+    def __init__(self) -> None:
+        self.snapshot_value = {"windows": [{"id": 7, "app": "VS Code", "title": "a - Dash-P4 - Visual Studio Code", "ws": "Dash-P4"}],
+                               "badges": [{"app": "Slack", "count": 3}], "vitals": {"cpu": 10, "ram": 50, "ram_free": 8.0}}
+        self.focused: list[int] = []
+
+    async def snapshot(self):
+        return self.snapshot_value
+
+    async def focus(self, window_id: int) -> bool:
+        self.focused.append(window_id)
+        return window_id == 7
+
+
+class StubLaunchers:
+    def __init__(self) -> None:
+        self.started: list[object] = []
+
+    def names(self):
+        return ["Stackport PRs"]
+
+    def deck(self):
+        return [{"name": "Stackport PRs", "icon": "github"}]
+
+    def launch(self, name, item=None):
+        self.started.append(name)
+        return (name == "Stackport PRs", "" if name == "Stackport PRs" else "no such launcher")
+
+
 class StubDisplay:
     def __init__(self) -> None:
         self.state: str | None = None
@@ -255,6 +284,50 @@ class Session(unittest.IsolatedAsyncioTestCase):
         await self.panel.send_action("mic", {"mode": "format c:"})
         await eventually(lambda: len(self.panel.results) == 2)
         self.assertFalse(self.panel.results[1]["ok"])  # only the named modes
+
+    async def test_pc_state_is_reported_and_windows_can_be_focused(self):
+        pc = StubPc()
+        self.link.pc = pc
+        self.link.runner.pc = pc
+        await self.start()
+        await eventually(lambda: any("windows" in s and "vitals" in s and "badges" in s for s in self.panel.states))
+        state = next(s for s in self.panel.states if "windows" in s)
+        self.assertEqual(state["windows"][0]["ws"], "Dash-P4")
+        self.assertEqual(state["badges"], [{"app": "Slack", "count": 3}])
+        await self.panel.send_action("focus", {"id": 7})
+        await eventually(lambda: self.panel.results)
+        self.assertTrue(self.panel.results[0]["ok"])
+        await self.panel.send_action("focus", {"id": "7; calc"})  # only an integer id
+        await eventually(lambda: len(self.panel.results) == 2)
+        self.assertFalse(self.panel.results[1]["ok"])
+        self.assertEqual(pc.focused, [7])
+
+    async def test_launchers_are_listed_and_run_by_name_only(self):
+        launchers = StubLaunchers()
+        self.link.launchers = launchers
+        self.link.runner.launchers = launchers
+        await self.start()
+        await eventually(lambda: any(s.get("launchers") == [{"name": "Stackport PRs", "icon": "github"}] for s in self.panel.states))
+        await self.panel.send_action("launch", {"name": "Stackport PRs"})
+        await self.panel.send_action("launch", {"name": "calc.exe"})
+        await eventually(lambda: len(self.panel.results) == 2)
+        self.assertTrue(self.panel.results[0]["ok"])
+        self.assertFalse(self.panel.results[1]["ok"])  # not on the PC's list
+
+    async def test_media_now_playing_is_reported_when_it_changes(self):
+        class Playing(StubMedia):
+            value = {"title": "Song", "artist": "Band", "app": "Spotify", "playing": True}
+
+            async def get(self):
+                return self.value
+
+        media = Playing()
+        self.link.media = media
+        self.link.runner.media = media
+        await self.start()
+        await eventually(lambda: any(s.get("media", {}) and s["media"]["title"] == "Song" for s in self.panel.states))
+        media.value = None
+        await eventually(lambda: any("media" in s and s["media"] is None for s in self.panel.states[1:]))
 
     async def test_wake_display_action(self):
         display = StubDisplay()
