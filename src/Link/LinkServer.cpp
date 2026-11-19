@@ -10,6 +10,7 @@
 #include <ArduinoJson.h>
 #include <NightMare.h>
 
+#include "App/Diag.h"
 #include "App/Heap.h"
 #include "App/Ota.h"
 #include "LinkProto.h"
@@ -53,6 +54,15 @@ constexpr size_t kPendingKept = 8;
 std::vector<std::string> g_outbox; // encoded frames, guarded by g_mutex
 std::vector<Pending> g_pending;    // newest last, guarded by g_mutex
 uint32_t g_nextAction = 1;
+
+// What the PC page shows, guarded by g_mutex.
+PcMedia g_media;
+PcVitals g_vitals;
+std::vector<PcWindow> g_windows;
+std::vector<PcBadge> g_badges;
+std::vector<PcLauncher> g_launchers;
+std::vector<PcRecent> g_recent;
+uint32_t g_pcRevision = 0;
 
 int64_t nowMs() { return esp_timer_get_time() / 1000; }
 
@@ -210,8 +220,123 @@ std::string peerAddressOf(int fd)
     return text;
 }
 
+// The PC page's keys of a state frame: each is sent whole when it changes. Caller holds g_mutex.
+void parsePcPage(JsonDocument &doc, const std::string &body)
+{
+    auto sent = [&](const char *key) { return body.find(std::string("\"") + key + "\"") != std::string::npos; };
+    if (sent("media"))
+    {
+        JsonVariantConst media = doc["media"];
+        g_media = PcMedia();
+        if (media.is<JsonObjectConst>())
+        {
+            g_media.title = clip(media["title"] | "", 90);
+            g_media.artist = clip(media["artist"] | "", 60);
+            g_media.app = clip(media["app"] | "", 20);
+            g_media.playing = media["playing"] | false;
+            g_media.known = !g_media.title.empty() || !g_media.artist.empty();
+        }
+    }
+    JsonVariantConst vitals = doc["vitals"];
+    if (vitals.is<JsonObjectConst>())
+    {
+        g_vitals = PcVitals();
+        g_vitals.known = true;
+        g_vitals.cpu = vitals["cpu"] | -1;
+        g_vitals.ram = vitals["ram"] | -1;
+        g_vitals.disk = vitals["disk"] | -1;
+        g_vitals.gpu = vitals["gpu"] | -1;
+        g_vitals.gpuTemp = vitals["gpu_temp"] | -1;
+        g_vitals.battery = vitals["battery"] | -1;
+        g_vitals.ramFreeGb = vitals["ram_free"] | -1.0f;
+        g_vitals.cpuTemp = vitals["cpu_temp"] | -1;
+        g_vitals.temp = vitals["temp"] | -1;
+        g_vitals.charging = vitals["charging"] | false;
+    }
+    JsonVariantConst windows = doc["windows"];
+    if (windows.is<JsonArrayConst>())
+    {
+        g_windows.clear();
+        for (JsonVariantConst w : windows.as<JsonArrayConst>())
+        {
+            PcWindow window;
+            window.id = w["id"] | 0u;
+            window.app = clip(w["app"] | "", 20);
+            window.title = clip(w["title"] | "", 80);
+            window.workspace = clip(w["ws"] | "", 80);
+            if (window.id && g_windows.size() < 16)
+            {
+                g_windows.push_back(window);
+            }
+        }
+        ++g_pcRevision;
+    }
+    JsonVariantConst badges = doc["badges"];
+    if (badges.is<JsonArrayConst>())
+    {
+        g_badges.clear();
+        for (JsonVariantConst b : badges.as<JsonArrayConst>())
+        {
+            PcBadge badge;
+            badge.app = clip(b["app"] | "", 20);
+            badge.count = b["count"] | 0;
+            if (!badge.app.empty() && badge.count > 0 && g_badges.size() < 6)
+            {
+                g_badges.push_back(badge);
+            }
+        }
+        ++g_pcRevision;
+    }
+    JsonVariantConst recent = doc["recent"];
+    if (recent.is<JsonArrayConst>())
+    {
+        g_recent.clear();
+        for (JsonVariantConst r : recent.as<JsonArrayConst>())
+        {
+            if (g_recent.size() < 10)
+            {
+                PcRecent item;
+                item.name = clip(r["name"] | "", 32);
+                item.where = clip(r["where"] | "", 40);
+                if (!item.name.empty())
+                {
+                    g_recent.push_back(item);
+                }
+            }
+        }
+        ++g_pcRevision;
+    }
+    JsonVariantConst launchers = doc["launchers"];
+    if (launchers.is<JsonArrayConst>())
+    {
+        g_launchers.clear();
+        for (JsonVariantConst l : launchers.as<JsonArrayConst>())
+        {
+            if (g_launchers.size() < 12)
+            {
+                PcLauncher launcher; // an object, or a bare string from an older companion
+                launcher.name = clip(l.is<JsonObjectConst>() ? (l["name"] | "") : (l | ""), 24);
+                launcher.icon = clip(l["icon"] | "", 12);
+                for (JsonVariantConst choice : l["menu"].as<JsonArrayConst>())
+                {
+                    if (launcher.menu.size() < 8)
+                    {
+                        PcChoice c; // an object, or a bare string
+                        c.name = clip(choice.is<JsonObjectConst>() ? (choice["name"] | "") : (choice | ""), 24);
+                        c.icon = clip(choice["icon"] | "", 12);
+                        launcher.menu.push_back(c);
+                    }
+                }
+                g_launchers.push_back(launcher);
+            }
+        }
+        ++g_pcRevision;
+    }
+}
+
 void clearPeer(const std::string &why)
 {
+    Diag_mark("PC link ended");
     std::lock_guard<std::mutex> lock(g_mutex);
     g_status.connected = false;
     g_status.callActive = false; // no link, no call to show
@@ -221,6 +346,13 @@ void clearPeer(const std::string &why)
     g_status.peerApp.clear();
     g_status.caps.clear();
     g_status.window.clear();
+    g_media = PcMedia();
+    g_vitals = PcVitals();
+    g_windows.clear();
+    g_badges.clear();
+    g_launchers.clear();
+    g_recent.clear();
+    ++g_pcRevision;
     g_status.heardAgoMs = 0;
     g_status.message = why;
     g_outbox.clear();
@@ -304,6 +436,7 @@ void runSession(int fd)
     }
     {
         std::lock_guard<std::mutex> lock(g_mutex);
+        Diag_mark("PC linked");
         g_status.connected = true;
         g_status.peer = name;
         g_status.peerAddress = address;
@@ -476,6 +609,7 @@ void runSession(int fd)
                 {
                     g_status.callActive = false; // "call": null: not in a call
                 }
+                parsePcPage(doc, body);
             }
             else if (type == LinkProto::kError)
             {
@@ -748,6 +882,106 @@ uint32_t LinkServer_micMute(const std::string &mode)
     JsonDocument doc;
     doc["name"] = "mic";
     doc["args"]["mode"] = mode;
+    return queueAction(doc);
+}
+
+PcMedia LinkServer_media()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_media;
+}
+
+PcVitals LinkServer_vitals()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_vitals;
+}
+
+std::vector<PcWindow> LinkServer_windows()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_windows;
+}
+
+std::vector<PcBadge> LinkServer_badges()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_badges;
+}
+
+std::vector<PcRecent> LinkServer_recent()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_recent;
+}
+
+uint32_t LinkServer_openRecent(const std::string &name)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_status.connected || name.empty())
+    {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["name"] = "open_recent";
+    doc["args"]["name"] = name;
+    return queueAction(doc);
+}
+
+std::vector<PcLauncher> LinkServer_launchers()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_launchers;
+}
+
+uint32_t LinkServer_pcRevision()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_pcRevision;
+}
+
+uint32_t LinkServer_mediaKey(const std::string &command)
+{
+    if (command != "play_pause" && command != "next" && command != "prev")
+    {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_status.connected)
+    {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["name"] = "media";
+    doc["args"]["cmd"] = command;
+    return queueAction(doc);
+}
+
+uint32_t LinkServer_focusWindow(uint32_t id)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_status.connected || id == 0)
+    {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["name"] = "focus";
+    doc["args"]["id"] = id;
+    return queueAction(doc);
+}
+
+uint32_t LinkServer_launch(const std::string &name, const std::string &item)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_status.connected || name.empty())
+    {
+        return 0;
+    }
+    JsonDocument doc;
+    doc["name"] = "launch";
+    doc["args"]["name"] = name;
+    if (!item.empty())
+        doc["args"]["item"] = item;
     return queueAction(doc);
 }
 
