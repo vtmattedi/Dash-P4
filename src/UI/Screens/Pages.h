@@ -6,11 +6,11 @@
 // refresh(). refresh() is called a few times a second while the page is visible and once
 // when it is shown; it should return quickly when nothing changed (compare a revision).
 
-lv_obj_t *PageHome_create(lv_obj_t *parent);
-void PageHome_refresh(bool force);
-
 lv_obj_t *PageCalendar_create(lv_obj_t *parent);
 void PageCalendar_refresh(bool force);
+
+lv_obj_t *PagePc_create(lv_obj_t *parent);
+void PagePc_refresh(bool force);
 
 lv_obj_t *PageNetwork_create(lv_obj_t *parent);
 void PageNetwork_refresh(bool force);

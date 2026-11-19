@@ -7,6 +7,7 @@
 #include "Theme.h"
 #include "CallDock.h"
 #include "Drawer.h"
+#include "Rest.h"
 
 namespace
 {
@@ -20,9 +21,9 @@ struct PageDef
 };
 
 const PageDef kPages[UI_PAGE_COUNT] = {
-    {"Home", LV_SYMBOL_HOME, "Home", PageHome_create, PageHome_refresh},
     {"Calendar", LV_SYMBOL_LIST, "Calendar", PageCalendar_create, PageCalendar_refresh},
     {"Tasks", LV_SYMBOL_OK, "Tasks", PageTasks_create, PageTasks_refresh},
+    {"PC", LV_SYMBOL_KEYBOARD, "PC", PagePc_create, PagePc_refresh},
     {"Network", LV_SYMBOL_WIFI, "Network", PageNetwork_create, PageNetwork_refresh},
     {"Settings", LV_SYMBOL_SETTINGS, "Settings", PageSettings_create, PageSettings_refresh},
 };
@@ -36,8 +37,8 @@ UiPage g_current = UI_PAGE_COUNT; // none yet
 void styleTab(UiPage page)
 {
     const bool active = (page == g_current);
-    lv_obj_set_style_bg_color(g_tab[page], active ? UI_COL_SURFACE_ALT : UI_COL_SURFACE, 0);
-    lv_obj_set_style_text_color(g_tab[page], active ? UI_COL_ACCENT : UI_COL_TEXT_DIM, 0);
+    Theme_bgColor(g_tab[page], active ? UI_COL_SURFACE_ALT : UI_COL_SURFACE);
+    Theme_textColor(g_tab[page], active ? UI_COL_ACCENT : UI_COL_TEXT_DIM);
     lv_obj_set_style_bg_opa(g_tabBar[page], active ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
 }
 
@@ -52,32 +53,48 @@ lv_obj_t *buildNavRail(lv_obj_t *parent)
     Theme_plain(rail);
     lv_obj_set_size(rail, UI_NAVRAIL_W, UI_CONTENT_H);
     lv_obj_set_pos(rail, 0, UI_STATUSBAR_H);
-    lv_obj_set_style_bg_color(rail, UI_COL_SURFACE, 0);
+    Theme_bgColor(rail, UI_COL_SURFACE);
     lv_obj_set_style_bg_opa(rail, LV_OPA_COVER, 0);
     lv_obj_set_style_border_side(rail, LV_BORDER_SIDE_RIGHT, 0);
     lv_obj_set_style_border_width(rail, 1, 0);
-    lv_obj_set_style_border_color(rail, UI_COL_BORDER, 0);
+    Theme_borderColor(rail, UI_COL_BORDER);
     lv_obj_set_flex_flow(rail, LV_FLEX_FLOW_COLUMN);
 
-    for (int i = 0; i < UI_PAGE_COUNT; ++i)
+    // Home is first but is not a page: it puts the panel to rest, which is what the home screen is now. The pages follow.
+    for (int n = 0; n <= UI_PAGE_COUNT; ++n)
     {
+        const bool home = (n == 0);
+        const int i = n - 1; // page index; -1 for the Home button
         lv_obj_t *tab = lv_obj_create(rail);
         Theme_plain(tab);
         // 100 px each while they fit; the rail is 556 px tall.
-        lv_obj_set_size(tab, UI_NAVRAIL_W - 1, UI_CONTENT_H / UI_PAGE_COUNT < 100 ? UI_CONTENT_H / UI_PAGE_COUNT : 100);
+        lv_obj_set_size(tab, UI_NAVRAIL_W - 1, UI_CONTENT_H / (UI_PAGE_COUNT + 1) < 100 ? UI_CONTENT_H / (UI_PAGE_COUNT + 1) : 100);
         lv_obj_set_style_bg_opa(tab, LV_OPA_COVER, 0);
         lv_obj_add_flag(tab, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_gap(tab, 6, 0);
-        lv_obj_add_event_cb(tab, onTab, LV_EVENT_CLICKED, reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+        if (home)
+        {
+            lv_obj_add_event_cb(tab, [](lv_event_t *) { Rest_now(); }, LV_EVENT_CLICKED, nullptr);
+        }
+        else
+        {
+            lv_obj_add_event_cb(tab, onTab, LV_EVENT_CLICKED, reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+        }
 
         lv_obj_t *icon = lv_label_create(tab);
-        lv_label_set_text(icon, kPages[i].symbol);
+        lv_label_set_text(icon, home ? LV_SYMBOL_HOME : kPages[i].symbol);
         lv_obj_set_style_text_font(icon, UI_FONT_XL, 0);
         lv_obj_t *label = lv_label_create(tab);
-        lv_label_set_text(label, kPages[i].label);
+        lv_label_set_text(label, home ? "Home" : kPages[i].label);
         lv_obj_set_style_text_font(label, UI_FONT_S, 0);
+        if (home)
+        {
+            Theme_bgColor(tab, UI_COL_SURFACE);
+            Theme_textColor(tab, UI_COL_TEXT_DIM);
+            continue; // no active marker, nothing to restyle
+        }
 
         // The active marker: a bar down the inside edge.
         lv_obj_t *bar = lv_obj_create(tab);
@@ -86,7 +103,7 @@ lv_obj_t *buildNavRail(lv_obj_t *parent)
         lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_size(bar, 4, 60);
         lv_obj_align(bar, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_set_style_bg_color(bar, UI_COL_ACCENT, 0);
+        Theme_bgColor(bar, UI_COL_ACCENT);
         lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
 
         g_tab[i] = tab;
@@ -143,7 +160,7 @@ void Ui_begin(lv_display_t *display)
 
     Drawer_create();
     CallDock_create();
-    Ui_show(UI_PAGE_HOME);
+    Ui_show(UI_PAGE_CALENDAR);
     lv_timer_create(onTick, 250, nullptr);
 }
 

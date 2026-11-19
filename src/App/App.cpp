@@ -248,7 +248,8 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
                 {
                     c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
                 }
-                if (message.subcommand == label || (r == 4 && message.subcommand == "REST"))
+                if (message.subcommand == label || (r == 1 && message.subcommand == "LIGHT") || (r == 2 && message.subcommand == "RGB") ||
+                    (r == 4 && message.subcommand == "REST"))
                 {
                     role = r;
                 }
@@ -256,7 +257,7 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
             if (role < 0)
             {
                 ok = false;
-                out = "Unknown role. Expected one of: AC, LIGHT, RGB, DOOR, REST.";
+                out = "Unknown role. Expected one of: AC, LIGHT (light and door), BEDLED (RGB), DOOR, REST.";
             }
             else
             {

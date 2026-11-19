@@ -137,7 +137,7 @@ void refreshLabels(const std::vector<const Device *> &devices)
         Theme_formatAge(now - d.lastSeenMs, age, sizeof(age));
         Theme_setText(g_rows[i].age, age);
         Theme_setText(g_rows[i].sub, subText(d).c_str());
-        lv_obj_set_style_bg_color(g_rows[i].dot, d.online ? UI_COL_OK : UI_COL_TEXT_FAINT, 0);
+        Theme_bgColor(g_rows[i].dot, d.online ? UI_COL_OK : UI_COL_TEXT_FAINT);
     }
     size_t online = 0;
     for (const Device *d : Registry_devices())
@@ -183,7 +183,7 @@ void rebuild(const std::vector<const Device *> &devices)
         lv_obj_t *row = lv_obj_create(g_list);
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, lv_pct(100), 72);
-        lv_obj_set_style_bg_color(row, UI_COL_SURFACE, 0);
+        Theme_bgColor(row, UI_COL_SURFACE);
         lv_obj_set_style_bg_color(row, UI_COL_SURFACE_ALT, LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(row, 14, 0);
@@ -230,8 +230,8 @@ void styleFilters()
     for (int i = 0; i < FilterCount; ++i)
     {
         const bool active = (i == g_filter);
-        lv_obj_set_style_bg_color(g_filterButtons[i], active ? UI_COL_ACCENT : UI_COL_SURFACE_HI, 0);
-        lv_obj_set_style_text_color(g_filterButtons[i], active ? lv_color_hex(0x1A1208) : UI_COL_TEXT, 0);
+        Theme_bgColor(g_filterButtons[i], active ? UI_COL_ACCENT : UI_COL_SURFACE_HI);
+        Theme_textColor(g_filterButtons[i], active ? lv_color_hex(0x1A1208) : UI_COL_TEXT);
     }
     Theme_setText(g_sortLabel, g_sort == SortName ? "Sort: status" : "Sort: recent");
 }
@@ -240,7 +240,7 @@ void styleFilters()
 void refreshLink()
 {
     const LinkStatus link = LinkServer_status();
-    lv_obj_set_style_bg_color(g_linkDot, link.connected ? UI_COL_OK : link.listening ? UI_COL_WARN : UI_COL_TEXT_FAINT, 0);
+    Theme_bgColor(g_linkDot, link.connected ? UI_COL_OK : link.listening ? UI_COL_WARN : UI_COL_TEXT_FAINT);
     char title[200];
     if (link.connected)
     {

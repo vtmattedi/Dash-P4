@@ -49,19 +49,19 @@ void buildMicIcon(lv_obj_t *parent)
 {
     lv_obj_t *icon = part(parent, (kButton - kIcon) / 2, (kButton - kIcon) / 2, kIcon, kIcon, 0);
     lv_obj_set_style_bg_opa(icon, LV_OPA_TRANSP, 0);
-    const lv_color_t ink = lv_color_white();
+    const lv_color_t ink = lv_color_hex(0x10141A); // dark on the green / red button
     lv_obj_t *capsule = part(icon, 12, 1, 12, 20, 6);
-    lv_obj_set_style_bg_color(capsule, ink, 0);
+    Theme_bgColor(capsule, ink);
     lv_obj_set_style_bg_opa(capsule, LV_OPA_COVER, 0);
     lv_obj_t *cup = part(icon, 6, 9, 24, 16, 12);
-    lv_obj_set_style_border_color(cup, ink, 0);
+    Theme_borderColor(cup, ink);
     lv_obj_set_style_border_width(cup, 3, 0);
     lv_obj_set_style_border_side(cup, static_cast<lv_border_side_t>(LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_RIGHT | LV_BORDER_SIDE_BOTTOM), 0);
     lv_obj_t *stem = part(icon, 16, 25, 4, 5, 0);
-    lv_obj_set_style_bg_color(stem, ink, 0);
+    Theme_bgColor(stem, ink);
     lv_obj_set_style_bg_opa(stem, LV_OPA_COVER, 0);
     lv_obj_t *foot = part(icon, 10, 30, 16, 3, 1);
-    lv_obj_set_style_bg_color(foot, ink, 0);
+    Theme_bgColor(foot, ink);
     lv_obj_set_style_bg_opa(foot, LV_OPA_COVER, 0);
     g_slash[0] = stroke(icon, UI_COL_DANGER, 8); // the gap the cut leaves in the microphone
     g_slash[1] = stroke(icon, ink, 3);
@@ -96,8 +96,8 @@ void refresh(lv_timer_t *)
     shownMuted = call.muted;
     lv_label_set_text(g_app, call.app.empty() ? "In a call" : call.app.c_str());
     lv_label_set_text(g_state, call.muted ? "Microphone muted" : "Microphone live");
-    lv_obj_set_style_text_color(g_state, call.muted ? UI_COL_DANGER : UI_COL_OK, 0);
-    lv_obj_set_style_bg_color(g_button, call.muted ? UI_COL_DANGER : UI_COL_OK, 0);
+    Theme_textColor(g_state, call.muted ? UI_COL_DANGER : UI_COL_OK);
+    Theme_bgColor(g_button, call.muted ? UI_COL_DANGER : UI_COL_OK);
     for (lv_obj_t *line : g_slash)
     {
         if (call.muted)
@@ -114,11 +114,11 @@ void CallDock_create()
     Theme_plain(g_dock);
     lv_obj_set_size(g_dock, kW, kH);
     lv_obj_align(g_dock, LV_ALIGN_BOTTOM_MID, 0, -kBottomGap);
-    lv_obj_set_style_bg_color(g_dock, UI_COL_SURFACE_ALT, 0);
+    Theme_bgColor(g_dock, UI_COL_SURFACE_ALT);
     lv_obj_set_style_bg_opa(g_dock, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(g_dock, kH / 2, 0);
     lv_obj_set_style_border_width(g_dock, 2, 0);
-    lv_obj_set_style_border_color(g_dock, UI_COL_BORDER, 0);
+    Theme_borderColor(g_dock, UI_COL_BORDER);
     lv_obj_set_style_pad_hor(g_dock, 22, 0);
     lv_obj_set_flex_flow(g_dock, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(g_dock, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);

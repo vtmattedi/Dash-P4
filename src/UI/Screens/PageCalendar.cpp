@@ -57,8 +57,8 @@ void restyleDays(int64_t now)
         Theme_setText(g_dayCount[i], badge);
 
         const bool selected = i == g_selected;
-        lv_obj_set_style_bg_color(g_dayRow[i], selected ? UI_COL_SURFACE_HI : UI_COL_SURFACE, 0);
-        lv_obj_set_style_text_color(g_dayLabel[i], selected ? UI_COL_ACCENT : i == 0 ? UI_COL_TEXT : UI_COL_TEXT_DIM, 0);
+        Theme_bgColor(g_dayRow[i], selected ? UI_COL_SURFACE_HI : UI_COL_SURFACE);
+        Theme_textColor(g_dayLabel[i], selected ? UI_COL_ACCENT : i == 0 ? UI_COL_TEXT : UI_COL_TEXT_DIM);
     }
 }
 
@@ -84,7 +84,7 @@ lv_obj_t *tappableRow(lv_obj_t *parent, int64_t id, bool highlighted)
     lv_obj_set_style_pad_all(row, 10, 0);
     lv_obj_set_style_pad_gap(row, 12, 0);
     lv_obj_set_style_radius(row, 10, 0);
-    lv_obj_set_style_bg_color(row, UI_COL_SURFACE_ALT, 0);
+    Theme_bgColor(row, UI_COL_SURFACE_ALT);
     lv_obj_set_style_bg_opa(row, highlighted ? LV_OPA_COVER : LV_OPA_50, 0);
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(row, onOpen, LV_EVENT_CLICKED, reinterpret_cast<void *>(static_cast<intptr_t>(id)));
@@ -97,7 +97,7 @@ lv_obj_t *colourBar(lv_obj_t *parent, lv_color_t colour)
     lv_obj_remove_style_all(bar);
     lv_obj_set_size(bar, 4, 40);
     lv_obj_set_style_radius(bar, 2, 0);
-    lv_obj_set_style_bg_color(bar, colour, 0);
+    Theme_bgColor(bar, colour);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
     return bar;
 }

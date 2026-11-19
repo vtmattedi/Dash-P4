@@ -120,5 +120,13 @@ void Theme_plain(lv_obj_t *obj);
 /// invalidates even for identical text, which is steady churn on a refresh loop.
 void Theme_setText(lv_obj_t *label, const char *text);
 
+/// Colour setters that do nothing when the colour is already that. LVGL repaints the whole object on every set, even for an
+/// unchanged value, so calling lv_obj_set_style_*_color from a refresh timer repaints the object (a card, a column) each tick.
+/// Use these in anything that runs repeatedly. Main part, default state only.
+void Theme_bgColor(lv_obj_t *obj, lv_color_t colour);
+void Theme_textColor(lv_obj_t *obj, lv_color_t colour);
+void Theme_borderColor(lv_obj_t *obj, lv_color_t colour);
+void Theme_borderWidth(lv_obj_t *obj, int32_t width);
+
 /// "3m ago" / "2h ago" for a duration in milliseconds.
 void Theme_formatAge(uint32_t ageMs, char *out, size_t outSize);

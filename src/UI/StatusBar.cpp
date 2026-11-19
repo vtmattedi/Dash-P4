@@ -32,7 +32,7 @@ void Notify(NotifySeverity severity, const std::string &, const std::string &tit
     {
         text += " - " + body;
     }
-    lv_obj_set_style_text_color(g_message, colour, 0);
+    Theme_textColor(g_message, colour);
     Theme_setText(g_message, text.c_str());
     g_messageUntil = lv_tick_get() + kMessageMs;
     if (g_messageUntil == 0)
@@ -47,11 +47,11 @@ lv_obj_t *StatusBar_create(lv_obj_t *parent)
     Theme_plain(bar);
     lv_obj_set_size(bar, BOARD_LCD_H_RES, UI_STATUSBAR_H);
     lv_obj_set_pos(bar, 0, 0);
-    lv_obj_set_style_bg_color(bar, UI_COL_SURFACE, 0);
+    Theme_bgColor(bar, UI_COL_SURFACE);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
     lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(bar, 1, 0);
-    lv_obj_set_style_border_color(bar, UI_COL_BORDER, 0);
+    Theme_borderColor(bar, UI_COL_BORDER);
     lv_obj_set_style_pad_hor(bar, UI_GUTTER, 0);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);

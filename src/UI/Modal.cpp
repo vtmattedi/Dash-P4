@@ -1,5 +1,7 @@
 #include "Modal.h"
 
+#include "Popover.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -236,7 +238,7 @@ ModalId Modal_open(const ModalOptions &options, lv_obj_t **bodyOut, lv_obj_t **f
     m->scrim = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(m->scrim);
     lv_obj_set_size(m->scrim, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
-    lv_obj_set_style_bg_color(m->scrim, UI_COL_SCRIM, 0);
+    Theme_bgColor(m->scrim, UI_COL_SCRIM);
     lv_obj_set_style_bg_opa(m->scrim, LV_OPA_60, 0);
     lv_obj_remove_flag(m->scrim, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(m->scrim, LV_OBJ_FLAG_CLICKABLE);
@@ -246,13 +248,13 @@ ModalId Modal_open(const ModalOptions &options, lv_obj_t **bodyOut, lv_obj_t **f
     const bool side = isSide(m->size);
     m->panel = lv_obj_create(m->scrim);
     lv_obj_remove_style_all(m->panel);
-    lv_obj_set_style_bg_color(m->panel, UI_COL_SURFACE, 0);
+    Theme_bgColor(m->panel, UI_COL_SURFACE);
     lv_obj_set_style_bg_opa(m->panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(m->panel, UI_COL_BORDER, 0);
+    Theme_borderColor(m->panel, UI_COL_BORDER);
     lv_obj_set_style_border_width(m->panel, 1, 0);
     lv_obj_set_style_radius(m->panel, side ? 0 : UI_RADIUS + 4, 0);
     lv_obj_set_style_pad_all(m->panel, 0, 0);
-    lv_obj_set_style_text_color(m->panel, UI_COL_TEXT, 0);
+    Theme_textColor(m->panel, UI_COL_TEXT);
     lv_obj_remove_flag(m->panel, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(m->panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_width(m->panel, widthFor(m->size));
@@ -277,7 +279,7 @@ ModalId Modal_open(const ModalOptions &options, lv_obj_t **bodyOut, lv_obj_t **f
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_border_side(header, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(header, 1, 0);
-    lv_obj_set_style_border_color(header, UI_COL_BORDER, 0);
+    Theme_borderColor(header, UI_COL_BORDER);
     m->title = Theme_label(header, options.title.c_str(), UI_FONT_L, UI_COL_TEXT);
     lv_label_set_long_mode(m->title, LV_LABEL_LONG_DOT);
     lv_obj_set_flex_grow(m->title, 1);
@@ -345,6 +347,7 @@ void Modal_close(ModalId id)
 
 void Modal_closeAll()
 {
+    Popover_close();
     while (!g_modals.empty())
     {
         destroy(g_modals.back());
@@ -458,7 +461,7 @@ ModalId Modal_text(const std::string &title, const std::string &text, ModalSize 
     {
         // A recessed block with the output in it.
         lv_obj_t *block = Theme_card(body, lv_pct(100), LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_color(block, UI_COL_BG, 0);
+        Theme_bgColor(block, UI_COL_BG);
         lv_obj_set_style_pad_all(block, 14, 0);
         m->aux = Theme_label(block, text.c_str(), UI_FONT_S, UI_COL_TEXT);
         lv_obj_set_width(m->aux, lv_pct(100));
@@ -561,7 +564,7 @@ ModalId Modal_list(const std::string &title, const std::vector<ListEntry> &entri
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
         lv_obj_set_style_min_height(row, 60, 0);
-        lv_obj_set_style_bg_color(row, UI_COL_SURFACE_ALT, 0);
+        Theme_bgColor(row, UI_COL_SURFACE_ALT);
         lv_obj_set_style_bg_color(row, UI_COL_SURFACE_HI, LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(row, 12, 0);

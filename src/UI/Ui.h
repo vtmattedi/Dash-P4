@@ -6,9 +6,9 @@
 
 enum UiPage
 {
-    UI_PAGE_HOME = 0,
-    UI_PAGE_CALENDAR, // the feed's events and deadlines by day
+    UI_PAGE_CALENDAR = 0, // the feed's events and deadlines by day (Home is not a page: its nav button opens the rest screen)
     UI_PAGE_TASKS,    // Linear and WOI tasks, filtered by source and status
+    UI_PAGE_PC,       // what the linked PC is doing: media, vitals, windows, launchers, unread
     UI_PAGE_NETWORK,
     UI_PAGE_SETTINGS,
     UI_PAGE_COUNT

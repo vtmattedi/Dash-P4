@@ -60,9 +60,9 @@ lv_color_t columnColour(TaskGroup group)
 
 void styleChip(lv_obj_t *chip, bool selected)
 {
-    lv_obj_set_style_bg_color(chip, selected ? UI_COL_SURFACE_HI : UI_COL_SURFACE, 0);
-    lv_obj_set_style_border_color(chip, selected ? UI_COL_ACCENT : UI_COL_BORDER, 0);
-    lv_obj_set_style_text_color(lv_obj_get_child(chip, 0), selected ? UI_COL_ACCENT : UI_COL_TEXT_DIM, 0);
+    Theme_bgColor(chip, selected ? UI_COL_SURFACE_HI : UI_COL_SURFACE);
+    Theme_borderColor(chip, selected ? UI_COL_ACCENT : UI_COL_BORDER);
+    Theme_textColor(lv_obj_get_child(chip, 0), selected ? UI_COL_ACCENT : UI_COL_TEXT_DIM);
 }
 
 void onSource(lv_event_t *e)
@@ -136,7 +136,7 @@ void addCard(lv_obj_t *list, const FeedItem &item, int64_t now)
     lv_obj_set_size(card, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(card, 12, 0);
     lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_bg_color(card, UI_COL_SURFACE_ALT, 0);
+    Theme_bgColor(card, UI_COL_SURFACE_ALT);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_gap(card, 6, 0);
@@ -259,7 +259,7 @@ lv_obj_t *PageTasks_create(lv_obj_t *parent)
     lv_obj_set_size(g_alert, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(g_alert, 10, 0);
     lv_obj_set_style_radius(g_alert, 10, 0);
-    lv_obj_set_style_bg_color(g_alert, UI_COL_DANGER, 0);
+    Theme_bgColor(g_alert, UI_COL_DANGER);
     lv_obj_set_style_bg_opa(g_alert, LV_OPA_30, 0);
     g_alertText = Theme_label(g_alert, "", UI_FONT_M, UI_COL_TEXT);
     lv_obj_set_width(g_alertText, lv_pct(100));

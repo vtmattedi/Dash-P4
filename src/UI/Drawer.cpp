@@ -3,12 +3,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <esp_system.h>
+
+#include <ArduinoJson.h>
+
+#include <NightMare.h>
+
 #include "App/AcClient.h"
 #include "App/Bindings.h"
 #include "App/Registry.h"
 #include "App/LedFeedback.h"
 #include "App/LedStrip.h"
 #include "App/LightControl.h"
+#include "App/Net.h"
 #include "App/Notifications.h"
 #include "App/PcPower.h"
 #include "App/Prefs.h"
@@ -21,9 +28,9 @@
 
 namespace
 {
-constexpr int kPanelW = 580; // three tiles across, anchored under the status icons
-constexpr int kPanelH = 542;
-constexpr int kTileW = 168;
+constexpr int kPanelW = 580; // four tiles across, anchored under the status icons
+constexpr int kPanelH = 430;
+constexpr int kTileW = 122; // four across
 constexpr int kTileH = 108;
 constexpr int kCardH = 84; // the Sherlock card under the tiles
 
@@ -51,18 +58,16 @@ bool g_dragging = false;
 lv_point_t g_dragStart = {0, 0};
 lv_obj_t *g_scrim;
 lv_obj_t *g_panel;
-lv_obj_t *g_slider;
-lv_obj_t *g_sliderValue;
-lv_obj_t *g_ledRow;
 lv_obj_t *g_sherlock;
 lv_obj_t *g_sherlockIcon;
 lv_obj_t *g_sherlockTitle;
 lv_obj_t *g_sherlockBar;
 lv_obj_t *g_sherlockSensors;
 
-lv_obj_t *g_ledButton;
 lv_timer_t *g_timer;
-Tile g_light, g_ac, g_rest, g_screenOff, g_pcOff;
+Tile g_light, g_ac, g_power, g_led, g_espNow;
+
+lv_obj_t *g_connInfo; // one line under the tiles: the broker or the ESP-NOW gateway
 bool g_open = false;
 int32_t g_pressY = 0;
 
@@ -85,13 +90,14 @@ void paint(const Tile &tile, bool active, lv_color_t activeColour, const char *c
 {
     setDisabled(tile.button, disabled);
     active = active && !disabled;
-    lv_obj_set_style_bg_color(tile.button, active ? activeColour : UI_COL_SURFACE_ALT, 0);
-    lv_obj_set_style_text_color(tile.icon, active ? lv_color_hex(0x10141A) : UI_COL_TEXT_DIM, 0);
-    lv_obj_set_style_text_color(tile.caption, active ? lv_color_hex(0x10141A) : UI_COL_TEXT, 0);
+    Theme_bgColor(tile.button, active ? activeColour : UI_COL_SURFACE_ALT);
+    Theme_textColor(tile.icon, active ? lv_color_hex(0x10141A) : UI_COL_TEXT_DIM);
+    Theme_textColor(tile.caption, active ? lv_color_hex(0x10141A) : UI_COL_TEXT);
     Theme_setText(tile.caption, caption);
 }
 
 void refreshLed();
+Tile makeTile(lv_obj_t *parent, const char *icon, const char *caption, lv_event_cb_t cb);
 
 // Sherlock, the bedroom board: the bar shows what its strip is doing (the colour role), the text its climate sensors.
 void refreshSherlock()
@@ -104,11 +110,11 @@ void refreshSherlock()
     const bool disabled = !bound || offline || !Rgb_hasState();
     const bool on = !disabled && Rgb_on();
     setDisabled(g_sherlock, disabled);
-    lv_obj_set_style_bg_color(g_sherlockBar, on ? lv_color_hex(Rgb_colour()) : UI_COL_SURFACE_HI, 0);
+    Theme_bgColor(g_sherlockBar, on ? lv_color_hex(Rgb_colour()) : UI_COL_SURFACE_HI);
     lv_obj_set_style_bg_opa(g_sherlockBar, disabled ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g_sherlockBar, disabled ? 1 : 0, 0);
-    lv_obj_set_style_border_color(g_sherlockBar, UI_COL_BORDER, 0);
-    lv_obj_set_style_text_color(g_sherlockIcon, on ? UI_COL_TEXT : UI_COL_TEXT_DIM, 0);
+    Theme_borderColor(g_sherlockBar, UI_COL_BORDER);
+    Theme_textColor(g_sherlockIcon, on ? UI_COL_TEXT : UI_COL_TEXT_DIM);
     if (disabled)
     {
         Theme_setText(g_sherlockSensors, !bound ? "Not bound" : (offline ? "Offline" : "No data"));
@@ -142,6 +148,102 @@ void onSherlock(lv_event_t *)
     refreshSherlock();
 }
 
+// What the ESP-NOW gateway says about itself, as one line. The library consumes the gateway's own retained status and
+// network announcements (they decide which gateway it joins), so the Registry never sees them: that part comes from
+// GatewayCandidateGet(). Only the client list reaches the Registry, under the gateway's id. Rebuilt only on a change.
+std::string gatewayLine()
+{
+    static std::string cached;
+    static std::string key;
+    const NightMare::GatewayCandidateStatus gw = NightMare::GatewayCandidateGet();
+    if (gw.id.empty())
+    {
+        return "No gateway heard yet";
+    }
+    const Device *device = Registry_find(gw.id);
+    const std::string clientsJson = device ? device->gatewayClients : std::string();
+    const std::string now = gw.id + (gw.known ? "|1" : "|0") + (gw.remoteMqttReady ? "1" : "0") + (gw.localMqttReady ? "1" : "0") +
+                            std::to_string(gw.channel) + "|" + gw.generation + "|" + std::to_string(clientsJson.size()) + "|" +
+                            std::to_string(device ? device->revision : 0);
+    if (now != key)
+    {
+        key = now;
+        cached = gw.id + (gw.known ? "  online" : "  offline");
+        if (gw.known)
+        {
+            if (gw.channel)
+                cached += "   ch " + std::to_string(gw.channel);
+            cached += std::string("   broker ") + ((gw.remoteMqttReady || gw.localMqttReady) ? "ready" : "down");
+        }
+        JsonDocument clients;
+        if (!clientsJson.empty() && !deserializeJson(clients, clientsJson))
+        {
+            int total = 0, connected = 0;
+            for (JsonObjectConst c : clients["clients"].as<JsonArrayConst>())
+            {
+                ++total;
+                connected += (c["connected"] | false) ? 1 : 0;
+            }
+            cached += "   " + std::to_string(connected) + " of " + std::to_string(total) + " devices connected";
+        }
+    }
+    return cached;
+}
+
+// The ESP-NOW tile is the one switch: Wi-Fi is core and MQTT is the default, so only the optional radio link is toggled here.
+// The line under the tiles says what the network is doing.
+void refreshConnectivity()
+{
+    const Prefs &prefs = Prefs_get();
+    const NetState net = Net_state();
+#if NM_NETWORK_ESPNOW
+    if (!prefs.espNowOn)
+    {
+        paint(g_espNow, false, UI_COL_INFO, "ESP-NOW off");
+    }
+    else if (Net_applying())
+    {
+        paint(g_espNow, true, UI_COL_INFO, "Switching");
+    }
+    else
+    {
+        paint(g_espNow, net.espNow, UI_COL_INFO, net.espNow ? "ESP-NOW linked" : "Searching");
+    }
+#else
+    paint(g_espNow, false, UI_COL_INFO, "No ESP-NOW", true);
+#endif
+    if (prefs.espNowOn)
+    {
+        std::string line = gatewayLine();
+        if (prefs.mqttOn && !net.espNow)
+        {
+            line += "   (MQTT carries traffic meanwhile)";
+        }
+        Theme_setText(g_connInfo, line.c_str());
+    }
+    else if (prefs.mqttOn)
+    {
+        Theme_setText(g_connInfo, net.mqtt ? "Broker connected" : "Broker not reachable");
+    }
+    else
+    {
+        Theme_setText(g_connInfo, "MQTT and ESP-NOW are off: no network traffic");
+    }
+}
+
+void onEspNow(lv_event_t *)
+{
+#if NM_NETWORK_ESPNOW
+    if (Net_applying())
+    {
+        return;
+    }
+    Prefs_setEspNowOn(!Prefs_get().espNowOn);
+    Net_applyPrefs();
+    refreshConnectivity();
+#endif
+}
+
 void refresh()
 {
     switch (LightControl_state())
@@ -172,23 +274,21 @@ void refresh()
         const bool on = AcClient_powerOn();
         paint(g_ac, on, UI_COL_INFO, on ? "AC on" : "AC off");
     }
-    paint(g_pcOff, false, UI_COL_INFO, LinkServer_connected() ? "PC off" : "No PC", !LinkServer_connected());
+    refreshConnectivity();
     refreshSherlock();
     refreshLed();
 }
 
-// The strip is a status light now (App/LedFeedback): the drawer only switches it on or off.
+// The strip is a status light now (App/LedFeedback): the tile only switches it on or off.
 void refreshLed()
 {
     if (!LedStrip_ready())
     {
-        lv_obj_add_flag(g_ledRow, LV_OBJ_FLAG_HIDDEN);
+        paint(g_led, false, UI_COL_ACCENT, "No LED", true);
         return;
     }
-    lv_obj_remove_flag(g_ledRow, LV_OBJ_FLAG_HIDDEN);
     const bool on = LedFeedback_enabled();
-    lv_label_set_text(lv_obj_get_child(g_ledButton, 0), on ? "On" : "Off");
-    lv_obj_set_style_bg_color(g_ledButton, on ? UI_COL_ACCENT : UI_COL_SURFACE_ALT, 0);
+    paint(g_led, on, UI_COL_ACCENT, on ? "LED on" : "LED off");
 }
 
 void onLedToggle(lv_event_t *)
@@ -228,50 +328,73 @@ void onAc(lv_event_t *)
     refresh();
 }
 
-// On the rest screen this tile is the way out of it.
-void onRest(lv_event_t *)
-{
-    Drawer_close();
-    if (Rest_active())
-    {
-        Rest_wake();
-    }
-    else
-    {
-        Rest_now();
-    }
-}
+// One way to turn things off: this tile opens three choices, each an icon. The first is this panel's own screen (a touch brings
+// it back); the other two are the linked PC's, so they are dimmed with no PC linked. What each does, to the PC and to this panel,
+// is in App/PcPower.h: the same code answers another panel asking over the network.
+ModalId g_powerModal = 0;
 
-// This panel's screen and nothing else: the PC and its monitors are left as they are. A touch brings it back.
-void onScreenOff(lv_event_t *)
+void onPowerChoice(lv_event_t *e)
 {
-    Drawer_close();
-    Rest_screenOff();
-}
-
-// Two different things go by "PC off", and one of them cannot be undone from here, so the tile asks which. What each
-// does, to the PC and to this panel, is in App/PcPower.h: the same code answers another panel asking over the network.
-void onPcOff(lv_event_t *)
-{
-    Drawer_close();
-    if (!LinkServer_connected())
+    const int choice = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    Modal_close(g_powerModal);
+    if (choice == 0)
     {
-        Notify(NotifySeverity::Warn, "drawer", "PC", "No PC is linked");
+        Rest_screenOff();
         return;
     }
-    std::vector<ListEntry> entries(2);
-    entries[0].label = "Monitors off";
-    entries[0].detail = "The PC keeps running. A key, the mouse or a touch here turns them back on.";
-    entries[0].dot = false;
-    entries[1].label = "Sleep";
-    entries[1].detail = "Suspends the PC. It has to be woken at the PC.";
-    entries[1].dot = false;
-    Modal_list("PC off", entries, [](size_t index) {
-        if (!(index == 0 ? PcPower_monitorsOff() : PcPower_sleep()))
+    if (choice == 3)
+    {
+        Modal_confirm("Reset the panel?", "The panel restarts and is unavailable for about ten seconds.", "Reset", Tone::Danger,
+                      [] { esp_restart(); });
+        return;
+    }
+    if (!(choice == 1 ? PcPower_monitorsOff() : PcPower_sleep()))
+    {
+        Notify(NotifySeverity::Warn, "drawer", "PC", "No PC is linked");
+    }
+}
+
+void onPower(lv_event_t *)
+{
+    Drawer_close();
+    ModalOptions options;
+    options.title = "Turn off";
+    options.size = ModalSize::Wide; // four tiles and a rule do not fit the 560 px dialog
+    lv_obj_t *body = nullptr;
+    g_powerModal = Modal_open(options, &body);
+    lv_obj_t *row = Theme_row(body, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_gap(row, 16, 0);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    static const char *const kIcon[4] = {LV_SYMBOL_EYE_CLOSE, LV_SYMBOL_IMAGE, LV_SYMBOL_PAUSE, LV_SYMBOL_REFRESH};
+    static const char *const kName[4] = {"Screen", "Monitors", "Sleep PC", "Reset"};
+    const bool linked = LinkServer_connected();
+    for (int i = 0; i < 4; ++i)
+    {
+        if (i == 3) // a vertical rule keeps the destructive choice apart from the three turn-off ones
         {
-            Notify(NotifySeverity::Warn, "drawer", "PC", "No PC is linked");
+            lv_obj_t *rule = lv_obj_create(row);
+            lv_obj_remove_style_all(rule);
+            lv_obj_set_size(rule, 2, 100);
+            lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
+            Theme_bgColor(rule, UI_COL_BORDER);
+            lv_obj_remove_flag(rule, LV_OBJ_FLAG_CLICKABLE);
         }
-    });
+        const Tile t = makeTile(row, kIcon[i], kName[i], onPowerChoice);
+        lv_obj_set_size(t.button, 150, 130);
+        if (i == 3) // last, and red: it restarts this panel
+        {
+            Theme_bgColor(t.button, UI_COL_DANGER);
+            lv_obj_set_style_text_color(t.icon, lv_color_hex(0x2A0009), 0); // dark on the red fill
+            lv_obj_set_style_text_color(t.caption, lv_color_hex(0x2A0009), 0);
+        }
+        lv_obj_remove_event_cb(t.button, onPowerChoice);
+        lv_obj_add_event_cb(t.button, onPowerChoice, LV_EVENT_CLICKED, reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+        setDisabled(t.button, i > 0 && i < 3 && !linked); // Reset is this panel's own, so it never needs a PC
+    }
+    lv_obj_t *note = Theme_label(body, linked ? "Screen: this panel only, a touch wakes it. Monitors and Sleep: the linked PC."
+                                              : "No PC is linked, so only this panel's screen can be turned off.",
+                                 UI_FONT_S, UI_COL_TEXT_FAINT);
+    lv_obj_set_width(note, lv_pct(100));
 }
 
 void onSettings(lv_event_t *)
@@ -279,24 +402,6 @@ void onSettings(lv_event_t *)
     Drawer_close();
     Rest_wake();
     Ui_show(UI_PAGE_SETTINGS);
-}
-
-// On the rest screen the slider is the resting brightness; elsewhere the normal one. Applied live, saved on release.
-void onBrightness(lv_event_t *e)
-{
-    const int level = lv_slider_get_value(lv_event_get_target_obj(e));
-    if (Rest_active())
-    {
-        Prefs_setBacklightRest(level, false);
-    }
-    else
-    {
-        Prefs_setBacklightActive(level, false);
-    }
-    board_set_backlight(static_cast<uint8_t>(level));
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d%%", level * 100 / 255);
-    Theme_setText(g_sliderValue, buf);
 }
 
 void onPanelPress(lv_event_t *)
@@ -323,7 +428,7 @@ Tile makeTile(lv_obj_t *parent, const char *icon, const char *caption, lv_event_
     lv_obj_remove_style_all(tile.button);
     lv_obj_set_size(tile.button, kTileW, kTileH);
     lv_obj_set_style_radius(tile.button, 16, 0);
-    lv_obj_set_style_bg_color(tile.button, UI_COL_SURFACE_ALT, 0);
+    Theme_bgColor(tile.button, UI_COL_SURFACE_ALT);
     lv_obj_set_style_bg_opa(tile.button, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(tile.button, UI_COL_SURFACE_HI, LV_STATE_PRESSED);
     lv_obj_add_flag(tile.button, LV_OBJ_FLAG_CLICKABLE);
@@ -348,14 +453,6 @@ void prepare()
 {
     // Above the rest screen too (it is created later, on the same layer).
     lv_obj_move_foreground(g_scrim);
-    const bool resting = Rest_active();
-    const int level = resting ? Prefs_get().blRest : Prefs_get().blActive;
-    lv_slider_set_range(g_slider, resting ? 0 : 8, 255);
-    lv_slider_set_value(g_slider, level, LV_ANIM_OFF);
-    Theme_setText(g_rest.caption, resting ? "Wake" : "Rest");
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d%%", level * 100 / 255);
-    Theme_setText(g_sliderValue, buf);
     refresh();
     lv_obj_remove_flag(g_scrim, LV_OBJ_FLAG_HIDDEN);
     lv_timer_resume(g_timer);
@@ -456,9 +553,9 @@ void Drawer_create()
     lv_obj_set_style_radius(g_panel, 20, 0);
     lv_obj_set_style_border_width(g_panel, 1, 0);
     lv_obj_set_style_border_side(g_panel, LV_BORDER_SIDE_FULL, 0);
-    lv_obj_set_style_bg_color(g_panel, UI_COL_SURFACE, 0);
+    Theme_bgColor(g_panel, UI_COL_SURFACE);
     lv_obj_set_style_bg_opa(g_panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(g_panel, UI_COL_BORDER, 0);
+    Theme_borderColor(g_panel, UI_COL_BORDER);
     lv_obj_set_style_pad_all(g_panel, UI_GUTTER, 0);
     lv_obj_add_flag(g_panel, LV_OBJ_FLAG_CLICKABLE); // swallow taps so they do not reach the scrim
     lv_obj_remove_flag(g_panel, LV_OBJ_FLAG_SCROLLABLE);
@@ -468,21 +565,27 @@ void Drawer_create()
     lv_obj_add_event_cb(g_panel, onPanelPress, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(g_panel, onPanelRelease, LV_EVENT_RELEASED, nullptr);
 
-    lv_obj_t *tiles = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, 2 * kTileH + 14);    lv_obj_set_flex_flow(tiles, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_t *tiles = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, kTileH);
+    lv_obj_set_flex_flow(tiles, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_gap(tiles, 14, 0);
     g_light = makeTile(tiles, UI_ICON_BULB, "Light", onLight);
     g_ac = makeTile(tiles, UI_ICON_SNOWFLAKE, "AC", onAc);
-    g_rest = makeTile(tiles, LV_SYMBOL_POWER, "Rest", onRest);
-    g_screenOff = makeTile(tiles, LV_SYMBOL_EYE_CLOSE, "Screen off", onScreenOff);
-    g_pcOff = makeTile(tiles, LV_SYMBOL_KEYBOARD, "PC off", onPcOff);
+    g_power = makeTile(tiles, LV_SYMBOL_POWER, "Power", onPower);
     makeTile(tiles, LV_SYMBOL_SETTINGS, "Settings", onSettings);
+
+    // Second row: the two switches that are not about a room, as tap tiles like the ones above.
+    lv_obj_t *tiles2 = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, kTileH);
+    lv_obj_set_flex_flow(tiles2, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(tiles2, 14, 0);
+    g_led = makeTile(tiles2, LV_SYMBOL_CHARGE, "LED", onLedToggle);
+    g_espNow = makeTile(tiles2, LV_SYMBOL_WIFI, "ESP-NOW", onEspNow);
 
     // Sherlock: tap to switch its strip; the bar is the strip's colour, the text its temperature and humidity.
     g_sherlock = lv_obj_create(g_panel);
     lv_obj_remove_style_all(g_sherlock);
-    lv_obj_set_size(g_sherlock, 3 * kTileW + 2 * 14, kCardH); // exactly as wide as the three tile columns
+    lv_obj_set_size(g_sherlock, kPanelW - 2 * UI_GUTTER, kCardH); // as wide as the tile row
     lv_obj_set_style_radius(g_sherlock, 16, 0);
-    lv_obj_set_style_bg_color(g_sherlock, UI_COL_SURFACE_ALT, 0);
+    Theme_bgColor(g_sherlock, UI_COL_SURFACE_ALT);
     lv_obj_set_style_bg_opa(g_sherlock, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(g_sherlock, UI_COL_SURFACE_HI, LV_STATE_PRESSED);
     lv_obj_set_style_pad_hor(g_sherlock, 20, 0);
@@ -513,29 +616,11 @@ void Drawer_create()
     lv_obj_set_style_text_align(g_sherlockSensors, LV_TEXT_ALIGN_RIGHT, 0);
     refreshSherlock();
 
-    lv_obj_t *row = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, 48);
-    lv_obj_set_style_pad_gap(row, 16, 0);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    Theme_label(row, "Brightness", UI_FONT_M, UI_COL_TEXT_DIM);
-    g_slider = lv_slider_create(row);
-    lv_obj_set_size(g_slider, 270, 14);
-    lv_slider_set_range(g_slider, 8, 255);
-    lv_obj_set_style_bg_color(g_slider, UI_COL_SURFACE_HI, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(g_slider, UI_COL_ACCENT, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(g_slider, UI_COL_ACCENT, LV_PART_KNOB);
-    lv_obj_set_style_pad_all(g_slider, 8, LV_PART_KNOB);
-    lv_obj_add_event_cb(g_slider, onBrightness, LV_EVENT_VALUE_CHANGED, nullptr);
-    lv_obj_add_event_cb(g_slider, [](lv_event_t *) { Prefs_commit(); }, LV_EVENT_RELEASED, nullptr);
-    g_sliderValue = Theme_label(row, "", UI_FONT_M, UI_COL_TEXT);
-
-    // The LED strip: it shows status (boot, Wi-Fi, Stackport alerts), so the only choice here is on or off.
-    g_ledRow = Theme_row(g_panel, kPanelW - 2 * UI_GUTTER, 52);
-    lv_obj_set_style_pad_gap(g_ledRow, 12, 0);
-    lv_obj_set_flex_align(g_ledRow, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_t *ledLabel = Theme_label(g_ledRow, "LED feedback", UI_FONT_M, UI_COL_TEXT_DIM);
-    lv_obj_set_width(ledLabel, 160);
-    g_ledButton = Theme_button(g_ledRow, "On", 96, 44);
-    lv_obj_add_event_cb(g_ledButton, onLedToggle, LV_EVENT_CLICKED, nullptr);
+    // What the network is doing, as a line (no card: the only switch is the ESP-NOW tile).
+    g_connInfo = Theme_label(g_panel, "", UI_FONT_S, UI_COL_TEXT_DIM);
+    lv_obj_set_width(g_connInfo, kPanelW - 2 * UI_GUTTER);
+    lv_label_set_long_mode(g_connInfo, LV_LABEL_LONG_DOT);
+    refreshConnectivity();
     refreshLed();
 
     g_timer = lv_timer_create([](lv_timer_t *) { refresh(); }, 400, nullptr);

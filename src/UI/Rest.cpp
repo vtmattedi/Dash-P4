@@ -178,11 +178,11 @@ lv_obj_t *panel(lv_obj_t *parent, int x, int y, int w, int h)
     Theme_plain(p);
     lv_obj_set_pos(p, x, y);
     lv_obj_set_size(p, w, h);
-    lv_obj_set_style_bg_color(p, UI_COL_SURFACE, 0);
+    Theme_bgColor(p, UI_COL_SURFACE);
     lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(p, UI_RADIUS, 0);
     lv_obj_set_style_border_width(p, 1, 0);
-    lv_obj_set_style_border_color(p, UI_COL_BORDER, 0);
+    Theme_borderColor(p, UI_COL_BORDER);
     return p;
 }
 
@@ -228,7 +228,7 @@ void refreshTopBar()
 
     StatusIcons_refresh(g_icons);
     const bool feedOk = feed.hasToken && feed.message == "ok";
-    lv_obj_set_style_text_color(g_iconFeed, feedOk ? UI_COL_TEXT_DIM : feed.hasToken ? UI_COL_WARN : UI_COL_DANGER, 0);
+    Theme_textColor(g_iconFeed, feedOk ? UI_COL_TEXT_DIM : feed.hasToken ? UI_COL_WARN : UI_COL_DANGER);
 }
 
 // ---------------------------------------------------------------- stackport
@@ -389,10 +389,10 @@ void rebuildStackBody()
         lv_obj_remove_style_all(card);
         lv_obj_set_size(card, w, LV_SIZE_CONTENT);
         lv_obj_set_style_radius(card, 10, 0);
-        lv_obj_set_style_bg_color(card, UI_COL_INFO, 0);
+        Theme_bgColor(card, UI_COL_INFO);
         lv_obj_set_style_bg_opa(card, LV_OPA_20, 0);
         lv_obj_set_style_border_width(card, 1, 0);
-        lv_obj_set_style_border_color(card, UI_COL_INFO, 0);
+        Theme_borderColor(card, UI_COL_INFO);
         lv_obj_set_style_border_opa(card, LV_OPA_50, 0);
         lv_obj_set_style_pad_all(card, 10, 0);
         lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -568,9 +568,9 @@ void refreshStackport()
         border = UI_COL_BORDER;
         sub = std::string(Stackport_linkText(Stackport_link())) + ", last known";
     }
-    lv_obj_set_style_border_color(g_stackPanel, border, 0);
+    Theme_borderColor(g_stackPanel, border);
     Theme_setText(g_stackTitle, title.c_str());
-    lv_obj_set_style_text_color(g_stackTitle, accent, 0);
+    Theme_textColor(g_stackTitle, accent);
     Theme_setText(g_stackSub, sub.c_str());
 
     // UP: the colour follows the projects' health only (down / unhealthy red, all up green); alerts such as a full disk have
@@ -788,7 +788,7 @@ void refreshTodos(int64_t now)
             {
                 lv_obj_set_style_bg_opa(row.dot, LV_OPA_TRANSP, 0);
                 Theme_setText(row.title, "Nothing in progress");
-                lv_obj_set_style_text_color(row.title, UI_COL_TEXT_FAINT, 0);
+                Theme_textColor(row.title, UI_COL_TEXT_FAINT);
                 Theme_setText(row.due, "");
             }
             continue;
@@ -796,14 +796,14 @@ void refreshTodos(int64_t now)
         const FeedItem &item = *todos[i];
         show(row.root, true);
         lv_obj_set_style_bg_opa(row.dot, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(row.dot, UI_COL_ACCENT, 0);
+        Theme_bgColor(row.dot, UI_COL_ACCENT);
         Theme_setText(row.title, item.title.empty() ? item.id.c_str() : item.title.c_str());
-        lv_obj_set_style_text_color(row.title, UI_COL_TEXT, 0);
+        Theme_textColor(row.title, UI_COL_TEXT);
         char due[32];
         CalFmt_due(item, now, due, sizeof(due));
         const bool overdue = strcmp(due, "overdue") == 0;
         Theme_setText(row.due, due[0] ? due : item.account.empty() ? item.source.c_str() : item.account.c_str());
-        lv_obj_set_style_text_color(row.due, overdue ? UI_COL_DANGER : UI_COL_TEXT_DIM, 0);
+        Theme_textColor(row.due, overdue ? UI_COL_DANGER : UI_COL_TEXT_DIM);
     }
 }
 
@@ -975,12 +975,12 @@ void fillSlot(Slot &slot, const CalEntry &entry, int64_t now, bool isNext)
     CalFmt_relative(entry.start - now, rel, sizeof(rel));
 
     // folded
-    lv_obj_set_style_bg_color(slot.rowBar, colour, 0);
+    Theme_bgColor(slot.rowBar, colour);
     Theme_setText(slot.rowTime, when);
     Theme_setText(slot.rowTitle, entry.title.c_str());
 
     // open
-    lv_obj_set_style_bg_color(slot.bar, colour, 0);
+    Theme_bgColor(slot.bar, colour);
     Theme_setText(slot.tag, isNext ? "NEXT" : today ? "LATER TODAY" : dayName);
     Theme_setText(slot.rel, rel);
     Theme_setText(slot.title, entry.title.c_str());
@@ -1022,19 +1022,19 @@ void refreshCalendar(int64_t now)
         snprintf(buf, sizeof(buf), "%s  \xE2\x80\xA2  until %s", current->title.c_str(), until);
         Theme_setText(g_nowTag, "NOW");
         Theme_setText(g_nowText, buf);
-        lv_obj_set_style_text_color(g_nowText, UI_COL_ACCENT, 0);
+        Theme_textColor(g_nowText, UI_COL_ACCENT);
     }
     else if (allDay)
     {
         Theme_setText(g_nowTag, "TODAY");
         Theme_setText(g_nowText, allDay->title.c_str());
-        lv_obj_set_style_text_color(g_nowText, UI_COL_TEXT, 0);
+        Theme_textColor(g_nowText, UI_COL_TEXT);
     }
     else
     {
         Theme_setText(g_nowTag, "NOW");
         Theme_setText(g_nowText, clockOk ? "Free" : "Waiting for the clock");
-        lv_obj_set_style_text_color(g_nowText, UI_COL_TEXT_FAINT, 0);
+        Theme_textColor(g_nowText, UI_COL_TEXT_FAINT);
     }
 
     // The accordion: the next event, then what follows it within two days.
@@ -1393,7 +1393,7 @@ void Rest_begin()
     g_root = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(g_root);
     lv_obj_set_size(g_root, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
-    lv_obj_set_style_bg_color(g_root, lv_color_black(), 0);
+    Theme_bgColor(g_root, lv_color_black());
     lv_obj_set_style_bg_opa(g_root, LV_OPA_COVER, 0);
     lv_obj_add_flag(g_root, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(g_root, LV_OBJ_FLAG_SCROLLABLE);
@@ -1433,7 +1433,7 @@ void Rest_begin()
     lv_obj_remove_style_all(pill);
     lv_obj_set_size(pill, 140, 6);
     lv_obj_set_style_radius(pill, 3, 0);
-    lv_obj_set_style_bg_color(pill, UI_COL_TEXT_FAINT, 0);
+    Theme_bgColor(pill, UI_COL_TEXT_FAINT);
     lv_obj_set_style_bg_opa(pill, LV_OPA_COVER, 0);
     lv_obj_remove_flag(pill, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_align(pill, LV_ALIGN_BOTTOM_MID, 0, -12);

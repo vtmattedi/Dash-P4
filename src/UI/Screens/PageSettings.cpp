@@ -18,6 +18,7 @@
 #include "UI/Ui.h"
 #include "UI/Theme.h"
 #include "UI/EspNowSetup.h"
+#include "UI/MicTestUi.h"
 #include "UI/WifiSetup.h"
 #include "board.h"
 #include "esp_chip_info.h"
@@ -32,6 +33,9 @@ namespace
 lv_obj_t *g_backlightValue, *g_restBacklightValue, *g_restAfterValue;
 lv_obj_t *g_wifi, *g_transport;
 lv_obj_t *g_bindingText[static_cast<int>(Role::Count)];
+// The roles offered on screen, in this order: the AC, the bed LED strip, then the light with its door sensor. The resting
+// corner still exists (console: TARGET REST) but is not offered.
+constexpr Role kShownRoles[] = {Role::Ac, Role::Rgb, Role::Light};
 lv_obj_t *g_about;
 uint32_t g_bindingsShown = UINT32_MAX;
 
@@ -133,42 +137,37 @@ lv_obj_t *sliderRow(lv_obj_t *card, const char *label, int min, int max, int val
 void onWifi(lv_event_t *) { WifiSetup_open(); }
 void onEspNowScan(lv_event_t *) { EspNowScanUi_open(); }
 
-// Wi-Fi (the station) and the transport are separate settings, applied at once by Net_applyPrefs(): ESP-NOW needs only the
-// radio, MQTT needs the station, and "None" runs neither.
-lv_obj_t *g_modeButton[3];
-lv_obj_t *g_wifiButton;
+// The Wi-Fi station is core and always on. MQTT and ESP-NOW are two independent switches, applied at once by Net_applyPrefs():
+// with both on, ESP-NOW carries the traffic while the gateway session is up and MQTT takes over when it is not.
+lv_obj_t *g_mqttButton;
+lv_obj_t *g_espNowButton;
 
 void paintNetwork()
 {
-    for (int i = 0; i < 3; ++i)
+    if (g_mqttButton != nullptr)
     {
-        if (g_modeButton[i] != nullptr)
-        {
-            lv_obj_set_style_bg_color(g_modeButton[i], Prefs_get().netMode == i ? UI_COL_ACCENT : UI_COL_SURFACE_ALT, 0);
-        }
+        Theme_bgColor(g_mqttButton, Prefs_get().mqttOn ? UI_COL_ACCENT : UI_COL_SURFACE_ALT);
+        Theme_textColor(g_mqttButton, Prefs_get().mqttOn ? lv_color_hex(0x1A1208) : UI_COL_TEXT);
+        lv_label_set_text(lv_obj_get_child(g_mqttButton, 0), Prefs_get().mqttOn ? "MQTT on" : "MQTT off");
     }
-    if (g_wifiButton != nullptr)
+    if (g_espNowButton != nullptr)
     {
-        lv_obj_set_style_bg_color(g_wifiButton, Prefs_get().wifiOn ? UI_COL_ACCENT : UI_COL_SURFACE_ALT, 0);
-        lv_label_set_text(lv_obj_get_child(g_wifiButton, 0), Prefs_get().wifiOn ? "Wi-Fi on" : "Wi-Fi off");
+        Theme_bgColor(g_espNowButton, Prefs_get().espNowOn ? UI_COL_ACCENT : UI_COL_SURFACE_ALT);
+        Theme_textColor(g_espNowButton, Prefs_get().espNowOn ? lv_color_hex(0x1A1208) : UI_COL_TEXT);
+        lv_label_set_text(lv_obj_get_child(g_espNowButton, 0), Prefs_get().espNowOn ? "ESP-NOW on" : "ESP-NOW off");
     }
 }
 
-void onNetMode(lv_event_t *e)
+void onMqttSwitch(lv_event_t *)
 {
-    const int mode = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (mode == Prefs_get().netMode)
-    {
-        return;
-    }
-    Prefs_setNetMode(mode);
+    Prefs_setMqttOn(!Prefs_get().mqttOn);
     Net_applyPrefs();
     paintNetwork();
 }
 
-void onWifiSwitch(lv_event_t *)
+void onEspNowSwitch(lv_event_t *)
 {
-    Prefs_setWifiOn(!Prefs_get().wifiOn);
+    Prefs_setEspNowOn(!Prefs_get().espNowOn);
     Net_applyPrefs();
     paintNetwork();
 }
@@ -209,9 +208,10 @@ void refreshBindings()
         return;
     }
     g_bindingsShown = Bindings_revision();
-    for (int r = 0; r < static_cast<int>(Role::Count); ++r)
+    for (const Role shown : kShownRoles)
     {
-        const Binding &b = Bindings_get(static_cast<Role>(r));
+        const int r = static_cast<int>(shown);
+        const Binding &b = Bindings_get(shown);
         std::string text = "not bound";
         if (!b.device.empty())
         {
@@ -220,13 +220,9 @@ void refreshBindings()
             {
                 text += " / " + b.resource;
             }
-            if (static_cast<Role>(r) == Role::Door)
-            {
-                text += b.invert ? "   (1 = closed)" : "   (1 = open)";
-            }
         }
         Theme_setText(g_bindingText[r], text.c_str());
-        lv_obj_set_style_text_color(g_bindingText[r], b.device.empty() ? UI_COL_TEXT_FAINT : UI_COL_TEXT, 0);
+        Theme_textColor(g_bindingText[r], b.device.empty() ? UI_COL_TEXT_FAINT : UI_COL_TEXT);
     }
 }
 
@@ -482,27 +478,26 @@ lv_obj_t *PageSettings_create(lv_obj_t *parent)
     buttonIn(netRow, LV_SYMBOL_EYE_OPEN "  ESP-NOW scan...", 230, onEspNowScan);
 #endif
     lv_obj_t *modeRow = Theme_row(net, lv_pct(100), 56);
-    g_wifiButton = buttonIn(modeRow, "Wi-Fi on", 150, onWifiSwitch);
-    Theme_label(modeRow, "Network", UI_FONT_M, UI_COL_TEXT_DIM);
-    g_modeButton[NET_MODE_MQTT] = buttonIn(modeRow, "MQTT", 120, onNetMode, Tone::Neutral, reinterpret_cast<void *>(static_cast<intptr_t>(NET_MODE_MQTT)));
+    Theme_label(modeRow, "Transports", UI_FONT_M, UI_COL_TEXT_DIM);
+    g_mqttButton = buttonIn(modeRow, "MQTT on", 170, onMqttSwitch);
 #if NM_NETWORK_ESPNOW
-    g_modeButton[NET_MODE_ESPNOW] = buttonIn(modeRow, "ESP-NOW", 140, onNetMode, Tone::Neutral, reinterpret_cast<void *>(static_cast<intptr_t>(NET_MODE_ESPNOW)));
+    g_espNowButton = buttonIn(modeRow, "ESP-NOW on", 200, onEspNowSwitch);
 #else
-    g_modeButton[NET_MODE_ESPNOW] = nullptr;
+    g_espNowButton = nullptr;
 #endif
-    g_modeButton[NET_MODE_NONE] = buttonIn(modeRow, "None", 110, onNetMode, Tone::Neutral, reinterpret_cast<void *>(static_cast<intptr_t>(NET_MODE_NONE)));
     paintNetwork();
 #if NM_NETWORK_ESPNOW
-    Theme_label(netRow, "Wi-Fi and the network are separate. ESP-NOW needs only the radio (and the dash-p4-c6 firmware), MQTT needs Wi-Fi.", UI_FONT_S, UI_COL_TEXT_FAINT);
+    Theme_label(netRow, "Wi-Fi is always on. With both transports on, ESP-NOW carries the traffic while the gateway is linked and MQTT takes over when it is not.", UI_FONT_S, UI_COL_TEXT_FAINT);
 #else
-    Theme_label(netRow, "Wi-Fi and the network are separate. This build has MQTT only; ESP-NOW is not compiled in.", UI_FONT_S, UI_COL_TEXT_FAINT);
+    Theme_label(netRow, "Wi-Fi is always on. This build has MQTT only; ESP-NOW is not compiled in.", UI_FONT_S, UI_COL_TEXT_FAINT);
 #endif
 
     // Bindings.
     lv_obj_t *bind = Theme_card(page, lv_pct(100), LV_SIZE_CONTENT);
     Theme_cardHeader(bind, "What the panel controls");
-    for (int r = 0; r < static_cast<int>(Role::Count); ++r)
+    for (const Role shown : kShownRoles)
     {
+        const int r = static_cast<int>(shown);
         lv_obj_t *row = Theme_row(bind, lv_pct(100), 56);
         lv_obj_t *l = Theme_label(row, Bindings_label(static_cast<Role>(r)), UI_FONT_M, UI_COL_TEXT_DIM);
         lv_obj_set_width(l, 190);
@@ -547,6 +542,7 @@ lv_obj_t *PageSettings_create(lv_obj_t *parent)
     buttonIn(grid, "Modal: busy", 200, onBusy);
     buttonIn(grid, "Modal: output", 200, onOutput);
     buttonIn(grid, "Board self-test", 200, onBoardTest, Tone::Accent);
+    buttonIn(grid, "Microphone test", 200, [](lv_event_t *) { MicTestUi_open(); }, Tone::Accent);
     // The buttons above were sized 200; the ones with long labels need a little more room.
     for (uint32_t i = 0; i < lv_obj_get_child_count(grid); ++i)
     {

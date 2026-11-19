@@ -3,10 +3,31 @@
 #include <stdio.h>
 #include <string.h>
 
+// lv_theme_t is opaque without this (the theme below is a small theme of our own wrapped around LVGL's default).
+#include "src/themes/lv_theme_private.h"
+
 namespace
 {
 lv_style_t g_card, g_plain, g_button, g_buttonPressed, g_chip;
 bool g_ready = false;
+
+// LVGL 9.2.2 leaks in lv_draw_sw_arc() for an arc with rounded ends: it takes a reference on one of the four cached circle
+// masks (lv_draw_sw_mask_radius_init) and never releases it. After four draws the cache is pinned, and every further draw
+// allocates a mask that is never freed. An arc that stays on screen (the Rest screen, the PC gauges, a spinner) ate internal
+// RAM until nothing was left and the UI stopped painting (the cyan screen). Found with the heap tracer: the whole leak was
+// lv_draw_sw_mask_radius_init / circ_calc_aa4 called from lv_draw_sw_arc. Square ends never take that path, so every arc in
+// the UI gets them, whatever the theme says. Revisit when LVGL is upgraded past the fix.
+lv_style_t g_flatArc;
+lv_theme_t g_theme;
+
+void applyTheme(lv_theme_t *, lv_obj_t *obj)
+{
+    if (lv_obj_check_type(obj, &lv_arc_class)) // arcs and the spinner, which is one
+    {
+        lv_obj_add_style(obj, &g_flatArc, LV_PART_MAIN);
+        lv_obj_add_style(obj, &g_flatArc, LV_PART_INDICATOR);
+    }
+}
 
 void styleButtonTone(lv_obj_t *button, Tone tone)
 {
@@ -72,7 +93,11 @@ void Theme_init(lv_display_t *display)
     // LVGL's default theme, dark, with our accent: gives sane defaults for switches,
     // sliders, dropdowns, keyboards and text areas that we do not restyle by hand.
     lv_theme_t *theme = lv_theme_default_init(display, UI_COL_ACCENT, UI_COL_INFO, true, UI_FONT_M);
-    lv_display_set_theme(display, theme);
+    lv_style_init(&g_flatArc);
+    lv_style_set_arc_rounded(&g_flatArc, false);
+    lv_theme_set_parent(&g_theme, theme);
+    lv_theme_set_apply_cb(&g_theme, applyTheme);
+    lv_display_set_theme(display, &g_theme);
 
     lv_style_init(&g_plain);
     lv_style_set_bg_opa(&g_plain, LV_OPA_TRANSP);
@@ -108,6 +133,7 @@ void Theme_init(lv_display_t *display)
     lv_style_set_pad_hor(&g_chip, 12);
     lv_style_set_pad_ver(&g_chip, 4);
     lv_style_set_border_width(&g_chip, 0);
+    lv_style_set_bg_opa(&g_chip, LV_OPA_20);
     lv_style_set_text_font(&g_chip, UI_FONT_S);
 
     // The screen itself.
@@ -141,6 +167,9 @@ lv_obj_t *Theme_column(lv_obj_t *parent, int32_t width, int32_t height)
     lv_obj_t *box = lv_obj_create(parent);
     Theme_plain(box);
     lv_obj_set_size(box, width, height);
+    // A layout box is never a tap target: left clickable, the text block of a tappable row swallowed every tap over it and
+    // only the narrow margins reached the row. The tap falls through to the first clickable ancestor instead.
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_gap(box, 10, 0);
     return box;
@@ -151,6 +180,7 @@ lv_obj_t *Theme_row(lv_obj_t *parent, int32_t width, int32_t height)
     lv_obj_t *box = lv_obj_create(parent);
     Theme_plain(box);
     lv_obj_set_size(box, width, height);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE); // see Theme_column
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(box, 10, 0);
@@ -228,9 +258,8 @@ void Theme_chipSet(lv_obj_t *chip, const char *text, lv_color_t colour)
     {
         Theme_setText(label, text);
     }
-    lv_obj_set_style_bg_color(chip, colour, 0);
-    lv_obj_set_style_bg_opa(chip, LV_OPA_20, 0);
-    lv_obj_set_style_text_color(chip, colour, 0);
+    Theme_bgColor(chip, colour);
+    Theme_textColor(chip, colour);
 }
 
 lv_obj_t *Theme_dot(lv_obj_t *parent, int32_t size, lv_color_t colour)
@@ -251,6 +280,38 @@ lv_obj_t *Theme_cardHeader(lv_obj_t *card, const char *title)
     lv_obj_t *row = Theme_row(card, lv_pct(100), LV_SIZE_CONTENT);
     Theme_label(row, title, UI_FONT_L, UI_COL_TEXT);
     return row;
+}
+
+void Theme_bgColor(lv_obj_t *obj, lv_color_t colour)
+{
+    if (!lv_color_eq(lv_obj_get_style_bg_color(obj, LV_PART_MAIN), colour))
+    {
+        lv_obj_set_style_bg_color(obj, colour, 0);
+    }
+}
+
+void Theme_textColor(lv_obj_t *obj, lv_color_t colour)
+{
+    if (!lv_color_eq(lv_obj_get_style_text_color(obj, LV_PART_MAIN), colour))
+    {
+        lv_obj_set_style_text_color(obj, colour, 0);
+    }
+}
+
+void Theme_borderColor(lv_obj_t *obj, lv_color_t colour)
+{
+    if (!lv_color_eq(lv_obj_get_style_border_color(obj, LV_PART_MAIN), colour))
+    {
+        lv_obj_set_style_border_color(obj, colour, 0);
+    }
+}
+
+void Theme_borderWidth(lv_obj_t *obj, int32_t width)
+{
+    if (lv_obj_get_style_border_width(obj, LV_PART_MAIN) != width)
+    {
+        lv_obj_set_style_border_width(obj, width, 0);
+    }
 }
 
 void Theme_setText(lv_obj_t *label, const char *text)

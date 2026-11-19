@@ -28,7 +28,7 @@ void StatusIcons_create(StatusIcons &icons, lv_obj_t *parent, int32_t height)
 
 }
 
-static void paint(lv_obj_t *label, lv_color_t colour) { lv_obj_set_style_text_color(label, colour, 0); }
+static void paint(lv_obj_t *label, lv_color_t colour) { Theme_textColor(label, colour); }
 
 void StatusIcons_refresh(const StatusIcons &icons)
 {
