@@ -1,4 +1,5 @@
 #include "Net.h"
+#include "Diag.h"
 
 #include "Prefs.h"
 
@@ -219,12 +220,14 @@ void Net_begin()
     //   +/telemetry/system|network runtime health (retained)
     //   +/manifest/msgpack         what each device exposes (retained)
     //   +/resource/+/state         every Value's current state (retained)
+    //   +/gateway/network|clients  a gateway's radio, uplinks and ESP-NOW clients (retained; the drawer shows them)
     //   Control/forecast           the weather, answered by the backend
     // Per-device extras (events, console replies, raw tail) are subscribed on demand.
     {
         std::lock_guard<std::mutex> lock(g_subMutex);
         for (const char *filter : {"+/status", "+/info", "+/telemetry/system", "+/telemetry/network",
-                                   "+/manifest/msgpack", "+/resource/+/state", "Control/forecast"})
+                                   "+/manifest/msgpack", "+/resource/+/state", "+/gateway/network", "+/gateway/clients",
+                                   "Control/forecast"})
         {
             g_subscriptions[filter] += 1;
         }
@@ -302,26 +305,22 @@ std::atomic<bool> g_applyAgain{false};
 
 void applyNow()
 {
+    Diag_mark("network apply");
     const Prefs &prefs = Prefs_get();
 
-    // The station first: MQTT needs it, ESP-NOW does not (it rides the radio, which stays up).
-    if (prefs.wifiOn)
-    {
-        if (!NightMare::WiFiIP_enabled() && !NightMare::WiFiBegin())
-        {
-            ESP_LOGE(TAG, "Wi-Fi station did not start");
-        }
-    }
-    else if (NightMare::WiFiIP_enabled())
-    {
-        NightMare::WiFiIP_disable();
-    }
+    // The Wi-Fi station is core: always up. MQTT and ESP-NOW are independent switches. Only one carries traffic at a time (ESP-NOW
+    // while the gateway session is up, MQTT otherwise), so with both on the broker topics (Stackport, weather) keep arriving
+    // if the gateway is lost.
+    const bool wantEspNow = prefs.espNowOn;
+    const bool wantMqtt = prefs.mqttOn;
 
-    const bool wantMqtt = prefs.netMode == NET_MODE_MQTT;
-    const bool wantEspNow = prefs.netMode == NET_MODE_ESPNOW;
     if (!wantMqtt && NightMare::Mqtt_enabled())
     {
         NightMare::Mqtt_disable();
+    }
+    if (!NightMare::WiFiIP_enabled() && !NightMare::WiFiBegin())
+    {
+        ESP_LOGE(TAG, "Wi-Fi station did not start");
     }
 #if NM_NETWORK_ESPNOW
     if (!wantEspNow && NightMare::EspNow_enabled())
@@ -345,13 +344,13 @@ void applyNow()
             ESP_LOGE(TAG, "MQTT did not start");
         }
     }
-    if (wantMqtt)
+    if (wantEspNow)
+    {
+        NightMare::SelectConnection(NightMare::ConnectionType::ESP_NOW); // preferred; MQTT is the fallback when it is also on
+    }
+    else if (wantMqtt)
     {
         NightMare::SelectConnection(NightMare::ConnectionType::MQTT);
-    }
-    else if (wantEspNow)
-    {
-        NightMare::SelectConnection(NightMare::ConnectionType::ESP_NOW);
     }
 }
 

@@ -6,20 +6,12 @@
 //
 // LVGL task only.
 
-/// Which NightMare transport the panel runs, independent of whether Wi-Fi is on (ESP-NOW needs only the radio, MQTT needs
-/// the Wi-Fi station). The two are exclusive: ESP-NOW alone has no MQTT fallback.
-enum NetMode : int
-{
-    NET_MODE_MQTT = 0,
-    NET_MODE_ESPNOW = 1,
-    NET_MODE_NONE = 2,
-};
-
 struct Prefs
 {
-    // MQTT until the C6's ESP-NOW bridge has been proven on the board; ESP-NOW is one tap away in Settings > Network.
-    int netMode = NET_MODE_MQTT;
-    bool wifiOn = true; // the Wi-Fi station (joining the access point); off leaves the radio to ESP-NOW
+    // The Wi-Fi station is core and always on. MQTT and ESP-NOW are independent switches (the drawer's tiles): when both are on,
+    // ESP-NOW carries the traffic while the gateway session is up and MQTT takes over when it is not. Only one is active.
+    bool mqttOn = true;
+    bool espNowOn = false;
     bool ledOn = true;     // the board LED strip shows status feedback (App/LedFeedback)
     int restAfterSec = 60; // idle seconds before the resting screen; 0 disables it
     int blActive = 200;    // backlight while in use, 8..255
@@ -35,9 +27,8 @@ const Prefs &Prefs_get();
 void Prefs_setRestAfter(int seconds, bool save = true);
 void Prefs_setBacklightActive(int level, bool save = true);
 void Prefs_setBacklightRest(int level, bool save = true);
-/// One of NetMode; saved at once.
-void Prefs_setNetMode(int mode);
-void Prefs_setWifiOn(bool on);
+void Prefs_setMqttOn(bool on);
+void Prefs_setEspNowOn(bool on);
 void Prefs_setLedOn(bool on);
 /// Write whatever was set with save = false.
 void Prefs_commit();

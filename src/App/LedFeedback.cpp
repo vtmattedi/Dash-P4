@@ -102,12 +102,6 @@ Slot *find(const char *name)
 void followNetwork()
 {
     static bool connectedBefore = false;
-    if (!Prefs_get().wifiOn)
-    {
-        LedFeedback_clear("net");
-        connectedBefore = false;
-        return;
-    }
     if (Net_state().wifiIp)
     {
         if (!connectedBefore)
