@@ -114,6 +114,42 @@ void Bindings_clear(Role role)
     Bindings_set(role, std::string());
 }
 
+bool Bindings_followLabels()
+{
+    bool moved = false;
+    const std::vector<const Device *> devices = Registry_devices();
+    for (int r = 0; r < static_cast<int>(Role::Count); ++r)
+    {
+        const Role role = static_cast<Role>(r);
+        // The door follows the light's device through Bindings_set(Light).
+        if (role == Role::Door && Bindings_configured(Role::Light))
+        {
+            continue;
+        }
+        const Binding b = g_bindings[r];
+        if (b.device.empty())
+        {
+            continue;
+        }
+        const Device *match = nullptr;
+        int matches = 0;
+        for (const Device *d : devices)
+        {
+            if (d->label == b.device && d->name != b.device)
+            {
+                match = d;
+                ++matches;
+            }
+        }
+        if (matches == 1)
+        {
+            Bindings_set(role, match->name, b.resource, b.invert);
+            moved = true;
+        }
+    }
+    return moved;
+}
+
 bool Bindings_matches(Role role, const std::string &device, const std::string &resource)
 {
     if (!Bindings_configured(role))

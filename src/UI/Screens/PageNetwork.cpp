@@ -77,7 +77,8 @@ bool matches(const Device &d)
         return true;
     }
     const std::string q = lower(g_query);
-    return lower(d.name).find(q) != std::string::npos || lower(d.hardware).find(q) != std::string::npos ||
+    return lower(d.name).find(q) != std::string::npos || lower(d.label).find(q) != std::string::npos ||
+           lower(d.hardware).find(q) != std::string::npos ||
            lower(d.kind).find(q) != std::string::npos;
 }
 
@@ -206,7 +207,7 @@ void rebuild(const std::vector<const Device *> &devices)
         lv_obj_t *text = Theme_column(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
         lv_obj_set_flex_grow(text, 1);
         lv_obj_set_style_pad_gap(text, 2, 0);
-        lv_obj_t *title = Theme_label(text, d->name.c_str(), UI_FONT_L, d->online ? UI_COL_TEXT : UI_COL_TEXT_DIM);
+        lv_obj_t *title = Theme_label(text, Device_displayName(*d).c_str(), UI_FONT_L, d->online ? UI_COL_TEXT : UI_COL_TEXT_DIM);
         lv_obj_set_width(title, lv_pct(100));
         lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
         r.sub = Theme_label(text, "", UI_FONT_S, UI_COL_TEXT_FAINT);

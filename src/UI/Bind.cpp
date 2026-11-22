@@ -173,7 +173,7 @@ void Bind_chooseFor(Role role)
     for (const Device *d : devices)
     {
         ListEntry e;
-        e.label = d->name;
+        e.label = Device_displayName(*d);
         e.detail = std::to_string(d->resources.size()) + " resources" + (d->online ? "" : "  -  offline");
         e.tone = (suits(d) || (role == Role::Ac && d->online)) ? Tone::Ok : Tone::Neutral;
         entries.push_back(e);

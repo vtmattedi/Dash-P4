@@ -228,7 +228,8 @@ void buildOverview(lv_obj_t *root)
     (void)seen;
 
     lv_obj_t *id = section(root, "Identity");
-    kv(id, "Name", d->name);
+    kv(id, "Name", Device_displayName(*d));
+    kv(id, "Address", d->name);
     if (!d->hardware.empty())
     {
         kv(id, "Hardware signature", d->hardware);

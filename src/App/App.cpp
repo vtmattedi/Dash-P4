@@ -613,6 +613,14 @@ static void housekeepingTimer(lv_timer_t *)
     {
         return;
     }
+    // Bindings made by name follow the device to its hardware address (its old name is now
+    // its label).
+    static uint32_t lastFollowMs = 0;
+    if (nowMs() - lastFollowMs >= 5000)
+    {
+        lastFollowMs = nowMs();
+        Bindings_followLabels();
+    }
     // Re-point the bound resources whenever a binding moved.
     if (appliedRevision != Bindings_revision())
     {

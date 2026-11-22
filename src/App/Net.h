@@ -12,16 +12,16 @@
 // NightMareNetwork owns the transports (MQTT primary, ESP-NOW backup) and the
 // failover between them. This file owns three things on top:
 //
-//   1. THE THREADING BOUNDARY. The library delivers messages and status changes on
-//      its own tasks (MQTT, Wi-Fi events). All application state -- the registry,
-//      the notification model, the explorer -- belongs to the LVGL task. So callbacks
-//      here only copy into a bounded inbox, and Net_drain() (an lv_timer, see
-//      App_begin) hands the copies to the registered listeners on the LVGL task.
-//      Nothing in the app is ever touched from a library task.
+//   1. THE THREADING BOUNDARY. All application state -- the registry, the
+//      notification model, the explorer -- belongs to the LVGL task. The library
+//      queues its callbacks (NM_MESSAGE_QUEUE_DEPTH, NM_DELIVER_IN_TICK 0) and
+//      Net_drain() (an lv_timer, see App_begin) runs them through
+//      NightMare::DeliverEvents() on the LVGL task. Nothing in the app is ever
+//      touched from a library task.
 //
-//   2. THE SUBSCRIPTION TABLE. The library keeps no subscription state and installs
-//      nothing on its own for a wildcard watcher, so the panel remembers what it
-//      wants and replays it on every (re)connect, whichever transport that is.
+//   2. THE SUBSCRIPTION COUNT. The library keeps the filters and reinstalls them on
+//      every (re)connect, whichever transport that is; this counts their users so
+//      a filter is dropped only when the last one lets go.
 //
 //   3. A SNAPSHOT of transport health for the status bar and notifications.
 //

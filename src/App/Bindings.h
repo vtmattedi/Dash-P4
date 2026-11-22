@@ -49,6 +49,10 @@ bool Bindings_configured(Role role);
 void Bindings_set(Role role, const std::string &device, const std::string &resource = std::string(),
                   bool invert = false);
 void Bindings_clear(Role role);
+/// A binding made by name before devices moved to hardware addresses (the device's old name
+/// is now its label): re-point it at the one device whose label is that name. Cheap; call
+/// periodically. True when something moved.
+bool Bindings_followLabels();
 
 /// Whether this exact address fills the role.
 bool Bindings_matches(Role role, const std::string &device, const std::string &resource);

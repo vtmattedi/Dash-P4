@@ -11,5 +11,5 @@ struct NetMessage
     const uint8_t *payload; // NUL-terminated for convenience; `length` excludes the NUL
     size_t length;
     bool retained;
-    uint32_t receivedMs; // ms since boot at arrival on the library task
+    uint32_t receivedMs; // ms since boot when handed to the app (Net_drain, on the LVGL task)
 };

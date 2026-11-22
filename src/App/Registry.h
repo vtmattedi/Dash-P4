@@ -42,7 +42,8 @@ struct ResourceState
 
 struct Device
 {
-    std::string name; // the topic segment: case-sensitive, unique
+    std::string name;  // the address: the topic segment, case-sensitive, unique
+    std::string label; // what people read, from the status "name"; may be empty
     std::string hardware;
     std::string timezone;
     std::string kind;      // "gateway" for gateways, empty for ordinary devices
@@ -91,6 +92,12 @@ void Registry_noteValue(const std::string &device, const std::string &resource, 
 size_t Registry_deviceCount();
 size_t Registry_resourceCount();
 size_t Registry_onlineCount();
+
+/// The label, or the address when the device has none.
+inline const std::string &Device_displayName(const Device &device)
+{
+    return device.label.empty() ? device.name : device.label;
+}
 
 /// All devices, sorted by name. Pointers stay valid until that device is forgotten
 /// or evicted.

@@ -62,6 +62,10 @@
 // "nm" task -- never from the LVGL task, and never in a task of the library's.
 // Jobs must only publish or post to the app's inbox; they must not touch UI state.
 #define NM_SCHEDULER_OWN_TASK 0
+// Library callbacks (messages, connects, network status) are queued and run by
+// Net_drain() on the LVGL task, not on the library's tasks nor in its tick.
+#define NM_MESSAGE_QUEUE_DEPTH 256
+#define NM_DELIVER_IN_TICK 0
 
 #pragma endregion
 

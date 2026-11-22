@@ -134,6 +134,14 @@ void handleStatus(const NetMessage &m, const std::string &name)
     device.seenStatus = true;
     device.statusMs = m.receivedMs;
     device.online = doc["online"] | false;
+    // "name" is the label (the address when there is none): display only.
+    const std::string label = doc["name"] | "";
+    const std::string previousLabel = device.label;
+    device.label = label == name ? std::string() : label;
+    if (device.label != previousLabel)
+    {
+        ++g_structure;
+    }
     device.hardware = doc["hardware"] | device.hardware.c_str();
     device.timezone = doc["timezone"] | device.timezone.c_str();
     const std::string previousKind = device.kind;
