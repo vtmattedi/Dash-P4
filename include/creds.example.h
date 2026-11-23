@@ -33,3 +33,7 @@
 // Optional: `FEED TOKEN <token>` on the console stores one on the panel instead, and wins over this.
 #define NOTIF_API_TOKEN ""
 // #define NOTIF_BASE_URL "https://notif.mattediworks.com"
+
+// NightMare namespace id (empty = legacy, no namespace); NM_TOPIC_ROOT is the MQTT topic root used once a namespace is set.
+// #define NM_NAMESPACE ""
+// #define NM_TOPIC_ROOT "nm"
