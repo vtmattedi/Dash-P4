@@ -57,8 +57,10 @@ void Net_drain(uint32_t budgetMs);
 
 /// Subscribe now (if a transport is up) and on every reconnect. Reference-counted:
 /// each Net_subscribe needs a matching Net_unsubscribe before the filter is dropped.
-void Net_subscribe(const std::string &filter);
-void Net_unsubscribe(const std::string &filter);
+/// `global` takes the filter as an absolute MQTT topic, outside the NightMare namespace prefix (for topics that are not
+/// NightMare's, such as the Stackport bridge); pass the same value to the matching Net_unsubscribe.
+void Net_subscribe(const std::string &filter, bool global = false);
+void Net_unsubscribe(const std::string &filter, bool global = false);
 
 bool Net_publish(const std::string &topic, const std::string &payload, bool retained = false);
 bool Net_publishBytes(const std::string &topic, const uint8_t *payload, size_t length,

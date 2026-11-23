@@ -433,10 +433,10 @@ static NightMareResults resolveAppCommand(const NightMareMessage &message)
         if (what == "off")
         {
             StackportSim_stop();
-            Net_unsubscribe(kStackportStatusFilter);
-            Net_unsubscribe(kStackportStateFilter);
-            Net_subscribe(kStackportStatusFilter);
-            Net_subscribe(kStackportStateFilter);
+            Net_unsubscribe(kStackportStatusFilter, true);
+            Net_unsubscribe(kStackportStateFilter, true);
+            Net_subscribe(kStackportStatusFilter, true);
+            Net_subscribe(kStackportStateFilter, true);
 #ifdef STACKPORT_BOOT_SIM
     StackportSim_start(STACKPORT_BOOT_SIM, true); // a build with -DSTACKPORT_BOOT_SIM=\"all\" shows the fake Stackport from boot
 #endif
@@ -655,8 +655,8 @@ void App_begin()
     Registry_onValue(onValue);
     Net_begin();
     // The Stackport tracker: the bridge's retained status and state sections (App/Stackport.h).
-    Net_subscribe(kStackportStatusFilter);
-    Net_subscribe(kStackportStateFilter);
+    Net_subscribe(kStackportStatusFilter, true);
+    Net_subscribe(kStackportStateFilter, true);
 
     // 20 ms: fast enough that a tap on a live value feels live, slow enough that a
     // retained-state replay (hundreds of messages) is spread over many frames.

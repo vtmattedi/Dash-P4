@@ -33,6 +33,9 @@ NetConnectedFn g_connectedListeners[kMaxListeners];
 std::mutex g_subMutex;
 std::map<std::string, int> g_subscriptions;
 
+// Global filters (outside the NightMare namespace) are counted apart from namespaced ones.
+std::string subscriptionKey(const std::string &filter, bool global) { return global ? "global:" + filter : filter; }
+
 template <typename Fn>
 bool addListener(Fn (&table)[kMaxListeners], Fn fn)
 {
@@ -111,7 +114,7 @@ bool Net_onMessage(NetMessageFn fn) { return addListener(g_messageListeners, fn)
 bool Net_onStatus(NetStatusFn fn) { return addListener(g_statusListeners, fn); }
 bool Net_onConnected(NetConnectedFn fn) { return addListener(g_connectedListeners, fn); }
 
-void Net_subscribe(const std::string &filter)
+void Net_subscribe(const std::string &filter, bool global)
 {
     if (filter.empty())
     {
@@ -120,21 +123,24 @@ void Net_subscribe(const std::string &filter)
     bool first;
     {
         std::lock_guard<std::mutex> lock(g_subMutex);
-        first = (g_subscriptions[filter]++ == 0);
+        first = (g_subscriptions[subscriptionKey(filter, global)]++ == 0);
     }
     if (first)
     {
         // Kept by the library: installed now if a transport is up, and on every reconnect.
-        NightMare::Subscribe(filter.c_str());
+        if (global)
+            NightMare::SubscribeGlobal(filter.c_str());
+        else
+            NightMare::Subscribe(filter.c_str());
     }
 }
 
-void Net_unsubscribe(const std::string &filter)
+void Net_unsubscribe(const std::string &filter, bool global)
 {
     bool last = false;
     {
         std::lock_guard<std::mutex> lock(g_subMutex);
-        auto it = g_subscriptions.find(filter);
+        auto it = g_subscriptions.find(subscriptionKey(filter, global));
         if (it == g_subscriptions.end())
         {
             return;
@@ -147,7 +153,10 @@ void Net_unsubscribe(const std::string &filter)
     }
     if (last)
     {
-        NightMare::Unsubscribe(filter.c_str());
+        if (global)
+            NightMare::UnsubscribeGlobal(filter.c_str());
+        else
+            NightMare::Unsubscribe(filter.c_str());
     }
 }
 
